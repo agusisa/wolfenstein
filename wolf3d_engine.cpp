@@ -1753,7 +1753,7 @@ void drawWeapon() {
             
             SDL_SetRenderDrawColor(renderer, 255, 50, 50, 200);
             SDL_Rect flash2 = {flashX - 5, flashY - 5, 50, 30};
-            SDL_RenderFillRect(renderer, &flash2);
+        SDL_RenderFillRect(renderer, &flash2);
             
             SDL_SetRenderDrawColor(renderer, 255, 150, 150, 255);
             SDL_Rect flash1 = {flashX + 5, flashY + 5, 30, 15};
@@ -1910,35 +1910,139 @@ void drawText(const char* text, int x, int y, int r, int g, int b, int scale = 1
 
 // Draw enemy sprite - DOG
 void drawDogSprite(int x, int y, int size) {
-    // Body (brown)
-    SDL_SetRenderDrawColor(renderer, 120, 80, 40, 255);
-    SDL_Rect body = {x + size/4, y + size/2, size/2, size/3};
-    SDL_RenderFillRect(renderer, &body);
+    // === PERRO MEJORADO - Más detallado y realista ===
     
-    // Head
-    SDL_Rect head = {x + size/3, y + size/3, size/3, size/4};
+    // Sombra debajo
+    SDL_SetRenderDrawColor(renderer, 30, 20, 10, 100);
+    SDL_Rect shadow = {x + size/6, y + size - 8, size*2/3, 6};
+    SDL_RenderFillRect(renderer, &shadow);
+    
+    // Cuerpo principal (marrón oscuro con gradiente)
+    SDL_SetRenderDrawColor(renderer, 90, 60, 30, 255);
+    SDL_Rect bodyBack = {x + size/6, y + size*5/12, size*3/5, size*5/12};
+    SDL_RenderFillRect(renderer, &bodyBack);
+    
+    // Parte frontal del cuerpo (más claro)
+    SDL_SetRenderDrawColor(renderer, 110, 70, 35, 255);
+    SDL_Rect bodyFront = {x + size/4, y + size/2, size*2/5, size*3/8};
+    SDL_RenderFillRect(renderer, &bodyFront);
+    
+    // Pecho (más claro - beige)
+    SDL_SetRenderDrawColor(renderer, 140, 100, 60, 255);
+    SDL_Rect chest = {x + size/3, y + size*7/12, size/5, size/6};
+    SDL_RenderFillRect(renderer, &chest);
+    
+    // Cuello musculoso
+    SDL_SetRenderDrawColor(renderer, 100, 65, 32, 255);
+    SDL_Rect neck = {x + size*2/5, y + size*2/5, size/6, size/8};
+    SDL_RenderFillRect(renderer, &neck);
+    
+    // Cabeza grande (más amenazante)
+    SDL_SetRenderDrawColor(renderer, 95, 62, 30, 255);
+    SDL_Rect head = {x + size*3/8, y + size/4, size/3, size/4};
     SDL_RenderFillRect(renderer, &head);
     
-    // Ears
-    SDL_SetRenderDrawColor(renderer, 100, 60, 30, 255);
-    SDL_Rect ear1 = {x + size/3, y + size/4, size/8, size/6};
-    SDL_Rect ear2 = {x + size/2, y + size/4, size/8, size/6};
-    SDL_RenderFillRect(renderer, &ear1);
-    SDL_RenderFillRect(renderer, &ear2);
+    // Hocico (más oscuro y alargado)
+    SDL_SetRenderDrawColor(renderer, 70, 45, 22, 255);
+    SDL_Rect snout = {x + size*5/8, y + size*3/8, size/4, size/8};
+    SDL_RenderFillRect(renderer, &snout);
     
-    // Eyes (red - aggressive)
+    // Nariz negra
+    SDL_SetRenderDrawColor(renderer, 20, 15, 10, 255);
+    SDL_Rect nose = {x + size*7/8 - 4, y + size*7/16, 6, 5};
+    SDL_RenderFillRect(renderer, &nose);
+    
+    // Orejas puntiagudas (estilo pastor alemán)
+    SDL_SetRenderDrawColor(renderer, 85, 55, 25, 255);
+    // Oreja izquierda
+    int earPoints1[][2] = {
+        {x + size*3/8, y + size/4},
+        {x + size*3/8 + 8, y + size/8},
+        {x + size*3/8 + 16, y + size/4}
+    };
+    for(int i = 0; i < 3; i++) {
+        SDL_Rect earPixel = {earPoints1[i][0], earPoints1[i][1], 3, size/12};
+        SDL_RenderFillRect(renderer, &earPixel);
+    }
+    // Oreja derecha
+    int earPoints2[][2] = {
+        {x + size*5/8 - 8, y + size/4},
+        {x + size*5/8, y + size/8},
+        {x + size*5/8 + 8, y + size/4}
+    };
+    for(int i = 0; i < 3; i++) {
+        SDL_Rect earPixel = {earPoints2[i][0], earPoints2[i][1], 3, size/12};
+        SDL_RenderFillRect(renderer, &earPixel);
+    }
+    
+    // Ojos brillantes rojos (más grandes y amenazantes)
     SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-    SDL_Rect eye1 = {x + size/3 + 2, y + size/3 + 2, 3, 3};
-    SDL_Rect eye2 = {x + size/2 - 2, y + size/3 + 2, 3, 3};
+    SDL_Rect eye1 = {x + size*7/16, y + size*5/16, 5, 5};
+    SDL_Rect eye2 = {x + size*9/16, y + size*5/16, 5, 5};
     SDL_RenderFillRect(renderer, &eye1);
     SDL_RenderFillRect(renderer, &eye2);
     
-    // Legs
-    SDL_SetRenderDrawColor(renderer, 100, 60, 30, 255);
-    for(int i = 0; i < 4; i++) {
-        SDL_Rect leg = {x + size/4 + i*size/8, y + size*3/4, size/12, size/4};
-        SDL_RenderFillRect(renderer, &leg);
+    // Brillo en los ojos (punto blanco)
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_Rect eyeShine1 = {x + size*7/16 + 1, y + size*5/16 + 1, 2, 2};
+    SDL_Rect eyeShine2 = {x + size*9/16 + 1, y + size*5/16 + 1, 2, 2};
+    SDL_RenderFillRect(renderer, &eyeShine1);
+    SDL_RenderFillRect(renderer, &eyeShine2);
+    
+    // Dientes visibles (amenazante)
+    SDL_SetRenderDrawColor(renderer, 240, 240, 220, 255);
+    for(int i = 0; i < 3; i++) {
+        SDL_Rect tooth = {x + size*5/8 + 2 + i*4, y + size*7/16, 3, 5};
+        SDL_RenderFillRect(renderer, &tooth);
     }
+    
+    // Patas musculosas (4 patas con detalle)
+    SDL_SetRenderDrawColor(renderer, 80, 50, 25, 255);
+    // Pata trasera izquierda
+    SDL_Rect leg1Upper = {x + size/5, y + size*3/4, size/10, size/5};
+    SDL_RenderFillRect(renderer, &leg1Upper);
+    SDL_SetRenderDrawColor(renderer, 70, 45, 20, 255);
+    SDL_Rect leg1Lower = {x + size/5, y + size - size/8, size/10, size/8};
+    SDL_RenderFillRect(renderer, &leg1Lower);
+    
+    // Pata trasera derecha
+    SDL_SetRenderDrawColor(renderer, 75, 48, 23, 255);
+    SDL_Rect leg2Upper = {x + size*3/8, y + size*3/4, size/10, size/5};
+    SDL_RenderFillRect(renderer, &leg2Upper);
+    SDL_SetRenderDrawColor(renderer, 65, 42, 18, 255);
+    SDL_Rect leg2Lower = {x + size*3/8, y + size - size/8, size/10, size/8};
+    SDL_RenderFillRect(renderer, &leg2Lower);
+    
+    // Pata delantera izquierda
+    SDL_SetRenderDrawColor(renderer, 85, 55, 27, 255);
+    SDL_Rect leg3Upper = {x + size/2, y + size*2/3, size/11, size/4};
+    SDL_RenderFillRect(renderer, &leg3Upper);
+    SDL_SetRenderDrawColor(renderer, 75, 48, 22, 255);
+    SDL_Rect leg3Lower = {x + size/2, y + size - size/10, size/11, size/10};
+    SDL_RenderFillRect(renderer, &leg3Lower);
+    
+    // Pata delantera derecha
+    SDL_SetRenderDrawColor(renderer, 80, 52, 25, 255);
+    SDL_Rect leg4Upper = {x + size*5/8, y + size*2/3, size/11, size/4};
+    SDL_RenderFillRect(renderer, &leg4Upper);
+    SDL_SetRenderDrawColor(renderer, 70, 45, 20, 255);
+    SDL_Rect leg4Lower = {x + size*5/8, y + size - size/10, size/11, size/10};
+    SDL_RenderFillRect(renderer, &leg4Lower);
+    
+    // Cola
+    SDL_SetRenderDrawColor(renderer, 85, 55, 27, 255);
+    SDL_Rect tail = {x + size/8, y + size*5/12, size/8, size/6};
+    SDL_RenderFillRect(renderer, &tail);
+    
+    // Collar (opcional - perro de ataque)
+    SDL_SetRenderDrawColor(renderer, 180, 30, 30, 255);
+    SDL_Rect collar = {x + size*2/5, y + size*9/20, size/6, size/20};
+    SDL_RenderFillRect(renderer, &collar);
+    
+    // Hebilla del collar
+    SDL_SetRenderDrawColor(renderer, 200, 200, 50, 255);
+    SDL_Rect buckle = {x + size/2, y + size*9/20 + 1, 4, size/25};
+    SDL_RenderFillRect(renderer, &buckle);
 }
 
 // Draw enemy sprite - SOLDIER
@@ -2500,12 +2604,12 @@ void updateEnemies(double deltaTime) {
                     printf("Rocket hit enemy! Explosion created\n");
                 } else {
                     // Bala normal
-                    enemy.health -= 50;
-                    if(enemy.health <= 0) {
-                        enemy.alive = false;
-                        kills++;
-                        if(enemyDeathSound) Mix_PlayChannel(-1, enemyDeathSound, 0);
-                        printf("Enemy killed! Total kills: %d\n", kills);
+                enemy.health -= 50;
+                if(enemy.health <= 0) {
+                    enemy.alive = false;
+                    kills++;
+                    if(enemyDeathSound) Mix_PlayChannel(-1, enemyDeathSound, 0);
+                    printf("Enemy killed! Total kills: %d\n", kills);
                     }
                 }
                 bullet.active = false;
@@ -2585,8 +2689,7 @@ void drawEnemies() {
     std::vector<std::pair<double, int>> enemyOrder;
     
     for(size_t i = 0; i < enemies.size(); i++) {
-        if(!enemies[i].alive) continue;
-        
+        // DIBUJAR TODOS los enemigos, vivos Y muertos
         double dx = enemies[i].x - posX;
         double dy = enemies[i].y - posY;
         double dist = dx * dx + dy * dy;
@@ -2620,13 +2723,28 @@ void drawEnemies() {
         // Aplicar efecto de salto (igual que las paredes y el piso)
         int jumpOffset = int(verticalPosition * SCREEN_HEIGHT * 0.02);
         
+        // Si el enemigo está muerto, hacerlo "acostado" (más plano)
+        float deathFlatten = 1.0f;
+        if(!enemy.alive && enemy.fallOffset > 0.5f) {
+            // A medida que cae, se aplana más (simula que se acuesta)
+            deathFlatten = 1.0f - ((enemy.fallOffset - 0.5f) * 0.8f); // 1.0 -> 0.6
+            if(deathFlatten < 0.3f) deathFlatten = 0.3f; // Mínimo 30% de altura
+        }
+        
+        spriteHeight = int(spriteHeight * deathFlatten);
+        
         int drawStartY = -spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels + jumpOffset;
         if(drawStartY < 0) drawStartY = 0;
         int drawEndY = spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels + jumpOffset;
         if(drawEndY >= SCREEN_HEIGHT) drawEndY = SCREEN_HEIGHT - 1;
         
         // Enemigos más delgados (30% del tamaño original)
-        int spriteWidth = abs(int(SCREEN_HEIGHT / transformY * 0.3));
+        // Si está muerto y completamente caído, hacerlo más ancho (perspectiva acostado)
+        float widthMultiplier = 0.3f;
+        if(!enemy.alive && enemy.fallOffset >= 1.0f) {
+            widthMultiplier = 0.5f; // Más ancho cuando está en el suelo
+        }
+        int spriteWidth = abs(int(SCREEN_HEIGHT / transformY * widthMultiplier));
         int drawStartX = -spriteWidth / 2 + spriteScreenX;
         if(drawStartX < 0) drawStartX = 0;
         int drawEndX = spriteWidth / 2 + spriteScreenX;
@@ -2659,6 +2777,15 @@ void drawEnemies() {
                 int litColor = int(color * enemyLight);
                 if(litColor < 0) litColor = 0;
                 
+                // Si el enemigo está muerto, oscurecer y aplicar tinte rojizo (sangre)
+                float deathDarken = 1.0f;
+                float bloodTint = 0.0f;
+                if(!enemy.alive) {
+                    deathDarken = 0.4f; // Oscurecer significativamente
+                    bloodTint = enemy.fallOffset * 0.6f; // Tinte rojo aumenta con la caída
+                }
+                litColor = int(litColor * deathDarken);
+                
                 // Calcular posición relativa en el sprite (para efecto 3D)
                 int relativeX = stripe - drawStartX;
                 int spriteCenter = spriteWidth / 2;
@@ -2668,41 +2795,53 @@ void drawEnemies() {
                 if(enemy.type == SOLDIER) {
                     // SOLDADO - Estilo 3D con sombras
                     
-                    // Piernas
-                    SDL_SetRenderDrawColor(renderer, 
-                        litColor/4 * shadeFactor, litColor/4 * shadeFactor, litColor/4 * shadeFactor, 255);
+                    // Piernas (con tinte de sangre si está muerto)
+                    int legR = litColor/4 * shadeFactor + (bloodTint * 100);
+                    int legG = litColor/4 * shadeFactor;
+                    int legB = litColor/4 * shadeFactor;
+                    SDL_SetRenderDrawColor(renderer, legR, legG, legB, 255);
                     SDL_Rect legs = {stripe, drawStartY + spriteHeight*2/3, 1, spriteHeight/3};
                     SDL_RenderFillRect(renderer, &legs);
                     
-                    // Torso (uniforme gris)
-                    SDL_SetRenderDrawColor(renderer, 
-                        litColor/3 * shadeFactor, litColor/3 * shadeFactor, litColor/3 * shadeFactor, 255);
+                    // Torso (uniforme gris con sangre)
+                    int torsoR = litColor/3 * shadeFactor + (bloodTint * 120);
+                    int torsoG = litColor/3 * shadeFactor;
+                    int torsoB = litColor/3 * shadeFactor;
+                    SDL_SetRenderDrawColor(renderer, torsoR, torsoG, torsoB, 255);
                     SDL_Rect torso = {stripe, drawStartY + spriteHeight/3, 1, spriteHeight/3};
                     SDL_RenderFillRect(renderer, &torso);
                     
                     // Brazos (más oscuros a los lados)
                     if(distFromCenter > spriteWidth * 0.3) {
-                        SDL_SetRenderDrawColor(renderer, 
-                            litColor/4 * shadeFactor, litColor/4 * shadeFactor, litColor/4 * shadeFactor, 255);
+                        int armR = litColor/4 * shadeFactor + (bloodTint * 80);
+                        int armG = litColor/4 * shadeFactor;
+                        int armB = litColor/4 * shadeFactor;
+                        SDL_SetRenderDrawColor(renderer, armR, armG, armB, 255);
                         SDL_Rect arm = {stripe, drawStartY + spriteHeight/2, 1, spriteHeight/4};
                         SDL_RenderFillRect(renderer, &arm);
                     }
                     
                     // Cabeza (piel)
-                    SDL_SetRenderDrawColor(renderer, 
-                        litColor * shadeFactor, litColor*0.8 * shadeFactor, litColor*0.6 * shadeFactor, 255);
+                    int headR = litColor * shadeFactor + (bloodTint * 100);
+                    int headG = litColor*0.8 * shadeFactor;
+                    int headB = litColor*0.6 * shadeFactor;
+                    SDL_SetRenderDrawColor(renderer, headR, headG, headB, 255);
                     SDL_Rect head = {stripe, drawStartY + spriteHeight/8, 1, spriteHeight/5};
                     SDL_RenderFillRect(renderer, &head);
                     
                     // Casco (verde oscuro)
                     SDL_SetRenderDrawColor(renderer, 
-                        30 * shadeFactor * enemyLight, 60 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 255);
+                        30 * shadeFactor * enemyLight * deathDarken, 
+                        60 * shadeFactor * enemyLight * deathDarken, 
+                        30 * shadeFactor * enemyLight * deathDarken, 255);
                     SDL_Rect helmet = {stripe, drawStartY, 1, spriteHeight/10};
                     SDL_RenderFillRect(renderer, &helmet);
                     
                     // Banda roja (Nazi)
                     if(distFromCenter < spriteWidth * 0.2) {
-                        SDL_SetRenderDrawColor(renderer, 180 * shadeFactor * enemyLight, 0, 0, 255);
+                        SDL_SetRenderDrawColor(renderer, 
+                            180 * shadeFactor * enemyLight * deathDarken + (bloodTint * 50), 
+                            0, 0, 255);
                         SDL_Rect band = {stripe, drawStartY + spriteHeight/2, 1, spriteHeight/12};
                         SDL_RenderFillRect(renderer, &band);
                     }
@@ -2712,45 +2851,57 @@ void drawEnemies() {
                     int dogHeight = spriteHeight * 0.65;
                     int dogStartY = drawStartY + spriteHeight * 0.35;
                     
-                    // Patas traseras
+                    // Patas traseras (con sangre si está muerto)
                     if(relativeX > spriteWidth * 0.6 || relativeX < spriteWidth * 0.4) {
-                        SDL_SetRenderDrawColor(renderer, 
-                            50 * shadeFactor * enemyLight, 35 * shadeFactor * enemyLight, 15 * shadeFactor * enemyLight, 255);
+                        int legR = 50 * shadeFactor * enemyLight * deathDarken + (bloodTint * 80);
+                        int legG = 35 * shadeFactor * enemyLight * deathDarken;
+                        int legB = 15 * shadeFactor * enemyLight * deathDarken;
+                        SDL_SetRenderDrawColor(renderer, legR, legG, legB, 255);
                         SDL_Rect leg = {stripe, int(dogStartY + dogHeight * 0.5), 1, int(dogHeight * 0.5)};
                         SDL_RenderFillRect(renderer, &leg);
                     }
                     
-                    // Cuerpo (pelaje marrón oscuro con gradiente)
+                    // Cuerpo (pelaje marrón oscuro con gradiente y sangre)
                     int bodyColor = 90 + (relativeX % 5);
-                    SDL_SetRenderDrawColor(renderer, 
-                        bodyColor * shadeFactor * enemyLight, (bodyColor * 0.6) * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
+                    int bodyR = bodyColor * shadeFactor * enemyLight * deathDarken + (bloodTint * 100);
+                    int bodyG = (bodyColor * 0.6) * shadeFactor * enemyLight * deathDarken;
+                    int bodyB = 20 * shadeFactor * enemyLight * deathDarken;
+                    SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, 255);
                     SDL_Rect body = {stripe, int(dogStartY + dogHeight * 0.2), 1, int(dogHeight * 0.4)};
                     SDL_RenderFillRect(renderer, &body);
                     
-                    // Pecho/vientre (más claro)
+                    // Pecho/vientre (más claro con sangre)
                     if(distFromCenter < spriteWidth * 0.25) {
-                        SDL_SetRenderDrawColor(renderer, 
-                            120 * shadeFactor * enemyLight, 90 * shadeFactor * enemyLight, 50 * shadeFactor * enemyLight, 255);
+                        int chestR = 120 * shadeFactor * enemyLight * deathDarken + (bloodTint * 90);
+                        int chestG = 90 * shadeFactor * enemyLight * deathDarken;
+                        int chestB = 50 * shadeFactor * enemyLight * deathDarken;
+                        SDL_SetRenderDrawColor(renderer, chestR, chestG, chestB, 255);
                         SDL_Rect chest = {stripe, int(dogStartY + dogHeight * 0.35), 1, int(dogHeight * 0.25)};
                         SDL_RenderFillRect(renderer, &chest);
                     }
                     
-                    // Hombros/espalda (negro)
-                    SDL_SetRenderDrawColor(renderer, 
-                        30 * shadeFactor * enemyLight, 25 * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
+                    // Hombros/espalda (negro con sangre)
+                    int backR = 30 * shadeFactor * enemyLight * deathDarken + (bloodTint * 70);
+                    int backG = 25 * shadeFactor * enemyLight * deathDarken;
+                    int backB = 20 * shadeFactor * enemyLight * deathDarken;
+                    SDL_SetRenderDrawColor(renderer, backR, backG, backB, 255);
                     SDL_Rect back = {stripe, int(dogStartY + dogHeight * 0.15), 1, int(dogHeight * 0.2)};
                     SDL_RenderFillRect(renderer, &back);
                     
-                    // Cabeza (hocico prominente)
-                    SDL_SetRenderDrawColor(renderer, 
-                        85 * shadeFactor * enemyLight, 60 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 255);
+                    // Cabeza (hocico prominente con sangre)
+                    int headR = 85 * shadeFactor * enemyLight * deathDarken + (bloodTint * 90);
+                    int headG = 60 * shadeFactor * enemyLight * deathDarken;
+                    int headB = 30 * shadeFactor * enemyLight * deathDarken;
+                    SDL_SetRenderDrawColor(renderer, headR, headG, headB, 255);
                     SDL_Rect head = {stripe, int(dogStartY), 1, int(dogHeight * 0.35)};
                     SDL_RenderFillRect(renderer, &head);
                     
-                    // Hocico (más oscuro, puntiagudo)
+                    // Hocico (más oscuro, puntiagudo con sangre)
                     if(distFromCenter < spriteWidth * 0.2) {
-                        SDL_SetRenderDrawColor(renderer, 
-                            40 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
+                        int snoutR = 40 * shadeFactor * enemyLight * deathDarken + (bloodTint * 80);
+                        int snoutG = 30 * shadeFactor * enemyLight * deathDarken;
+                        int snoutB = 20 * shadeFactor * enemyLight * deathDarken;
+                        SDL_SetRenderDrawColor(renderer, snoutR, snoutG, snoutB, 255);
                         SDL_Rect snout = {stripe, int(dogStartY + dogHeight * 0.15), 1, int(dogHeight * 0.15)};
                         SDL_RenderFillRect(renderer, &snout);
                     }
@@ -5336,8 +5487,8 @@ void render() {
                     if(bullet.isBazooka) {
                         // Estela violeta para bazooka
                         SDL_SetRenderDrawColor(renderer, 180, 80, 230, alpha);
-                        SDL_Rect trailRect = {screenX - trailSize/2, screenY - trailSize/2, trailSize, trailSize};
-                        SDL_RenderFillRect(renderer, &trailRect);
+                    SDL_Rect trailRect = {screenX - trailSize/2, screenY - trailSize/2, trailSize, trailSize};
+                    SDL_RenderFillRect(renderer, &trailRect);
                     } else {
                         // Estela azul brillante para balas normales
                         SDL_SetRenderDrawColor(renderer, 100, 150, 255, alpha);
@@ -5384,9 +5535,9 @@ void render() {
                     
                     // Núcleo violeta brillante
                     SDL_SetRenderDrawColor(renderer, 200, 100, 255, 255);
-                    SDL_Rect bulletRect = {screenX - bulletSize/2, screenY - bulletSize/2, bulletSize, bulletSize};
-                    SDL_RenderFillRect(renderer, &bulletRect);
-                    
+                SDL_Rect bulletRect = {screenX - bulletSize/2, screenY - bulletSize/2, bulletSize, bulletSize};
+                SDL_RenderFillRect(renderer, &bulletRect);
+                
                     // Centro blanco-violeta (core)
                     int coreSize = std::max(3, bulletSize / 2);
                     SDL_SetRenderDrawColor(renderer, 230, 180, 255, 255);
