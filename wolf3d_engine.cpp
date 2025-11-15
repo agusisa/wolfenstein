@@ -149,6 +149,108 @@ struct Item {
 
 std::vector<Item> items;
 
+// ============================================================================
+// REPLAY SYSTEM - Frame-by-Frame Recording for AI Training
+// ============================================================================
+
+// Input state structure (critical for AI training)
+struct InputState {
+    bool forward, backward, strafeLeft, strafeRight;
+    bool rotateLeft, rotateRight;
+    bool shoot, jump, sprint;
+    int weaponSelected; // 0-3
+    
+    InputState() : forward(false), backward(false), strafeLeft(false), strafeRight(false),
+                   rotateLeft(false), rotateRight(false), shoot(false), jump(false), 
+                   sprint(false), weaponSelected(0) {}
+};
+
+// Snapshot structures
+struct EnemySnapshot {
+    double x, y;
+    int health;
+    bool alive;
+    int type; // SOLDIER or DOG
+    double fallOffset;
+    
+    EnemySnapshot() : x(0), y(0), health(0), alive(false), type(0), fallOffset(0) {}
+    EnemySnapshot(const Enemy& e) : x(e.x), y(e.y), health(e.health), alive(e.alive), 
+                                     type(e.type), fallOffset(e.fallOffset) {}
+};
+
+struct BulletSnapshot {
+    double x, y, dirX, dirY;
+    int lifetime;
+    bool isEnemy;
+    
+    BulletSnapshot() : x(0), y(0), dirX(0), dirY(0), lifetime(0), isEnemy(false) {}
+    BulletSnapshot(const Bullet& b) : x(b.x), y(b.y), dirX(b.dirX), dirY(b.dirY), 
+                                       lifetime(b.lifetime), isEnemy(b.isEnemy) {}
+};
+
+struct ItemSnapshot {
+    double x, y;
+    int type; // ITEM_AMMO or ITEM_HEALTH
+    bool active;
+    
+    ItemSnapshot() : x(0), y(0), type(0), active(false) {}
+    ItemSnapshot(const Item& i) : x(i.x), y(i.y), type(i.type), active(i.active) {}
+};
+
+struct LaserBeamSnapshot {
+    double x, y, dirX, dirY;
+    int lifetime;
+    
+    LaserBeamSnapshot() : x(0), y(0), dirX(0), dirY(0), lifetime(0) {}
+    LaserBeamSnapshot(const LaserBeam& l) : x(l.x), y(l.y), dirX(l.dirX), dirY(l.dirY), 
+                                             lifetime(l.lifetime) {}
+};
+
+// Complete game state snapshot
+struct GameStateSnapshot {
+    // Player state
+    double posX, posY, dirX, dirY, planeX, planeY;
+    int playerHealth, ammo, kills, bulletsFired;
+    int currentWeapon;
+    double cameraRoll, verticalPosition, verticalVelocity;
+    bool isJumping, laserActive;
+    
+    // Input state (critical for AI)
+    InputState input;
+    
+    // Game entities
+    std::vector<EnemySnapshot> enemies;
+    std::vector<BulletSnapshot> bullets;
+    std::vector<BulletSnapshot> enemyBullets;
+    std::vector<ItemSnapshot> items;
+    std::vector<LaserBeamSnapshot> laserBeams;
+    
+    // Game state
+    bool gameOver, gameWon;
+    double timestamp;
+    int frameNumber;
+    
+    GameStateSnapshot() : posX(0), posY(0), dirX(0), dirY(0), planeX(0), planeY(0),
+                          playerHealth(0), ammo(0), kills(0), bulletsFired(0),
+                          currentWeapon(0), cameraRoll(0), verticalPosition(0), verticalVelocity(0),
+                          isJumping(false), laserActive(false), gameOver(false), gameWon(false),
+                          timestamp(0), frameNumber(0) {}
+};
+
+// Replay system variables
+std::vector<GameStateSnapshot> recordedFrames;
+bool isRecording = true; // Always recording during gameplay
+int currentFrameNumber = 0;
+const int MAX_RECORDED_FRAMES = 36000; // 10 minutes @ 60 FPS
+InputState currentInput; // Current input state
+
+// Replay playback variables
+bool isReplaying = false;
+int replayCurrentFrame = 0;
+float replaySpeed = 1.0f; // 1.0 = normal, 0.5 = slow, 2.0 = fast
+bool replayPaused = false;
+float replayFrameAccumulator = 0.0f; // For variable speed playback
+
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 bool running = true;
@@ -211,6 +313,570 @@ void generateSounds() {
         pickupHealthBuffer[i] = (Sint16)(sin(2 * M_PI * freq * t) * 8000 * exp(-t * 6));
     }
     pickupHealthSound = Mix_QuickLoad_RAW((Uint8*)pickupHealthBuffer, pickupHealthSamples * 2);
+}
+
+// ============================================================================
+// REPLAY SYSTEM FUNCTIONS
+// ============================================================================
+
+// Capture current game state into a snapshot
+GameStateSnapshot captureCurrentState(double timestamp) {
+    GameStateSnapshot snapshot;
+    
+    // Player state
+    snapshot.posX = posX;
+    snapshot.posY = posY;
+    snapshot.dirX = dirX;
+    snapshot.dirY = dirY;
+    snapshot.planeX = planeX;
+    snapshot.planeY = planeY;
+    snapshot.playerHealth = playerHealth;
+    snapshot.ammo = ammo;
+    snapshot.kills = kills;
+    snapshot.bulletsFired = bulletsFired;
+    snapshot.currentWeapon = currentWeapon;
+    snapshot.cameraRoll = cameraRoll;
+    snapshot.verticalPosition = verticalPosition;
+    snapshot.verticalVelocity = verticalVelocity;
+    snapshot.isJumping = isJumping;
+    snapshot.laserActive = laserActive;
+    
+    // Input state (current inputs)
+    snapshot.input = currentInput;
+    
+    // Enemies
+    snapshot.enemies.clear();
+    for(const auto& enemy : enemies) {
+        snapshot.enemies.push_back(EnemySnapshot(enemy));
+    }
+    
+    // Bullets
+    snapshot.bullets.clear();
+    for(const auto& bullet : bullets) {
+        if(bullet.active) {
+            snapshot.bullets.push_back(BulletSnapshot(bullet));
+        }
+    }
+    
+    snapshot.enemyBullets.clear();
+    for(const auto& bullet : enemyBullets) {
+        if(bullet.active) {
+            snapshot.enemyBullets.push_back(BulletSnapshot(bullet));
+        }
+    }
+    
+    // Items
+    snapshot.items.clear();
+    for(const auto& item : items) {
+        snapshot.items.push_back(ItemSnapshot(item));
+    }
+    
+    // Laser beams
+    snapshot.laserBeams.clear();
+    for(const auto& beam : laserBeams) {
+        if(beam.active) {
+            snapshot.laserBeams.push_back(LaserBeamSnapshot(beam));
+        }
+    }
+    
+    // Game state
+    snapshot.gameOver = gameOver;
+    snapshot.gameWon = gameWon;
+    snapshot.timestamp = timestamp;
+    snapshot.frameNumber = currentFrameNumber;
+    
+    return snapshot;
+}
+
+// Record current frame
+void recordFrame(double timestamp) {
+    if(!isRecording || isReplaying) return;
+    
+    // Check if we've reached the maximum
+    if(recordedFrames.size() >= MAX_RECORDED_FRAMES) {
+        // Remove oldest frame (circular buffer)
+        recordedFrames.erase(recordedFrames.begin());
+    }
+    
+    // Capture and store current state
+    GameStateSnapshot snapshot = captureCurrentState(timestamp);
+    recordedFrames.push_back(snapshot);
+    currentFrameNumber++;
+    
+    // Print first frame recorded
+    if(currentFrameNumber == 1) {
+        printf(">>> First frame recorded! Recording active.\n");
+    }
+    
+    // Optional: Print progress every 600 frames (10 seconds @ 60 FPS)
+    if(currentFrameNumber % 600 == 0) {
+        printf("Recording: %d frames (%.1f seconds)\n", currentFrameNumber, timestamp);
+    }
+}
+
+// Clear recording (when restarting game)
+void clearRecording() {
+    recordedFrames.clear();
+    currentFrameNumber = 0;
+    isRecording = true;
+    printf("Recording cleared. Ready to record new session.\n");
+}
+
+// Apply a snapshot to restore game state
+void applyGameState(const GameStateSnapshot& snapshot) {
+    // Player state
+    posX = snapshot.posX;
+    posY = snapshot.posY;
+    dirX = snapshot.dirX;
+    dirY = snapshot.dirY;
+    planeX = snapshot.planeX;
+    planeY = snapshot.planeY;
+    playerHealth = snapshot.playerHealth;
+    ammo = snapshot.ammo;
+    kills = snapshot.kills;
+    bulletsFired = snapshot.bulletsFired;
+    currentWeapon = snapshot.currentWeapon;
+    cameraRoll = snapshot.cameraRoll;
+    verticalPosition = snapshot.verticalPosition;
+    verticalVelocity = snapshot.verticalVelocity;
+    isJumping = snapshot.isJumping;
+    laserActive = snapshot.laserActive;
+    
+    // Enemies
+    enemies.clear();
+    for(const auto& enemySnap : snapshot.enemies) {
+        Enemy enemy(enemySnap.x, enemySnap.y, (EnemyType)enemySnap.type);
+        enemy.health = enemySnap.health;
+        enemy.alive = enemySnap.alive;
+        enemy.fallOffset = enemySnap.fallOffset;
+        enemies.push_back(enemy);
+    }
+    
+    // Bullets
+    bullets.clear();
+    for(const auto& bulletSnap : snapshot.bullets) {
+        Bullet bullet;
+        bullet.x = bulletSnap.x;
+        bullet.y = bulletSnap.y;
+        bullet.dirX = bulletSnap.dirX;
+        bullet.dirY = bulletSnap.dirY;
+        bullet.lifetime = bulletSnap.lifetime;
+        bullet.active = true;
+        bullet.isEnemy = bulletSnap.isEnemy;
+        bullets.push_back(bullet);
+    }
+    
+    enemyBullets.clear();
+    for(const auto& bulletSnap : snapshot.enemyBullets) {
+        Bullet bullet;
+        bullet.x = bulletSnap.x;
+        bullet.y = bulletSnap.y;
+        bullet.dirX = bulletSnap.dirX;
+        bullet.dirY = bulletSnap.dirY;
+        bullet.lifetime = bulletSnap.lifetime;
+        bullet.active = true;
+        bullet.isEnemy = bulletSnap.isEnemy;
+        enemyBullets.push_back(bullet);
+    }
+    
+    // Items
+    items.clear();
+    for(const auto& itemSnap : snapshot.items) {
+        Item item(itemSnap.x, itemSnap.y, (ItemType)itemSnap.type);
+        item.active = itemSnap.active;
+        items.push_back(item);
+    }
+    
+    // Laser beams
+    laserBeams.clear();
+    for(const auto& beamSnap : snapshot.laserBeams) {
+        LaserBeam beam;
+        beam.x = beamSnap.x;
+        beam.y = beamSnap.y;
+        beam.dirX = beamSnap.dirX;
+        beam.dirY = beamSnap.dirY;
+        beam.lifetime = beamSnap.lifetime;
+        beam.active = true;
+        laserBeams.push_back(beam);
+    }
+    
+    // Game state
+    gameOver = snapshot.gameOver;
+    gameWon = snapshot.gameWon;
+}
+
+// Start replay mode
+void startReplay() {
+    printf(">>> startReplay() called. Frames: %d, isRecording: %d\n", (int)recordedFrames.size(), isRecording);
+    
+    if(recordedFrames.empty()) {
+        printf(">>> ERROR: No frames recorded yet!\n");
+        return;
+    }
+    
+    isReplaying = true;
+    replayCurrentFrame = 0;
+    replayPaused = false;
+    replaySpeed = 1.0f;
+    replayFrameAccumulator = 0.0f;
+    
+    // Apply first frame
+    applyGameState(recordedFrames[0]);
+    
+    printf(">>> REPLAY MODE: Started (%d frames recorded)\n", (int)recordedFrames.size());
+    printf(">>> Controls: SPACE=pause, ←/→=frame step, Q/E=skip, -/+=speed, R=restart, X=export, ESC=exit\n");
+}
+
+// Exit replay mode and return to gameplay
+void exitReplay() {
+    if(!isReplaying) return;
+    
+    isReplaying = false;
+    replayPaused = false;
+    
+    // Restore to last recorded frame (continue gameplay)
+    if(!recordedFrames.empty()) {
+        applyGameState(recordedFrames.back());
+    }
+    
+    printf("REPLAY MODE: Exited. Returning to gameplay.\n");
+}
+
+// Export replay to JSON for AI training
+void exportReplayToJSON() {
+    if(recordedFrames.empty()) {
+        printf("ERROR: No frames to export!\n");
+        return;
+    }
+    
+    printf("Exporting replay to JSON... (%d frames)\n", (int)recordedFrames.size());
+    
+    // Start building JSON string
+    std::string json = "{\n";
+    
+    // Metadata
+    json += "  \"metadata\": {\n";
+    
+    char buffer[512];
+    sprintf(buffer, "    \"total_frames\": %d,\n", (int)recordedFrames.size());
+    json += buffer;
+    
+    double duration = recordedFrames.back().timestamp;
+    sprintf(buffer, "    \"duration_seconds\": %.2f,\n", duration);
+    json += buffer;
+    
+    const char* result = gameWon ? "victory" : (gameOver ? "defeat" : "ongoing");
+    sprintf(buffer, "    \"result\": \"%s\",\n", result);
+    json += buffer;
+    
+    sprintf(buffer, "    \"final_kills\": %d,\n", recordedFrames.back().kills);
+    json += buffer;
+    
+    sprintf(buffer, "    \"final_health\": %d,\n", recordedFrames.back().playerHealth);
+    json += buffer;
+    
+    double accuracy = recordedFrames.back().bulletsFired > 0 ? 
+                     (double)recordedFrames.back().kills / recordedFrames.back().bulletsFired : 0.0;
+    sprintf(buffer, "    \"accuracy\": %.4f\n", accuracy);
+    json += buffer;
+    
+    json += "  },\n";
+    
+    // Frames array
+    json += "  \"frames\": [\n";
+    
+    // Export frames (sample every 5 frames to reduce size, or all if < 600 frames)
+    int frameStep = (recordedFrames.size() > 600) ? 5 : 1;
+    int exportedFrames = 0;
+    
+    for(size_t i = 0; i < recordedFrames.size(); i += frameStep) {
+        const GameStateSnapshot& frame = recordedFrames[i];
+        
+        if(exportedFrames > 0) json += ",\n";
+        
+        json += "    {\n";
+        
+        sprintf(buffer, "      \"frame\": %d,\n", frame.frameNumber);
+        json += buffer;
+        
+        sprintf(buffer, "      \"timestamp\": %.3f,\n", frame.timestamp);
+        json += buffer;
+        
+        // Player state
+        json += "      \"player\": {\n";
+        sprintf(buffer, "        \"pos\": [%.3f, %.3f],\n", frame.posX, frame.posY);
+        json += buffer;
+        sprintf(buffer, "        \"dir\": [%.3f, %.3f],\n", frame.dirX, frame.dirY);
+        json += buffer;
+        sprintf(buffer, "        \"health\": %d,\n", frame.playerHealth);
+        json += buffer;
+        sprintf(buffer, "        \"ammo\": %d,\n", frame.ammo);
+        json += buffer;
+        sprintf(buffer, "        \"weapon\": %d,\n", frame.currentWeapon);
+        json += buffer;
+        sprintf(buffer, "        \"kills\": %d\n", frame.kills);
+        json += buffer;
+        json += "      },\n";
+        
+        // Input state
+        json += "      \"input\": {\n";
+        sprintf(buffer, "        \"forward\": %s,\n", frame.input.forward ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"backward\": %s,\n", frame.input.backward ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"strafe_left\": %s,\n", frame.input.strafeLeft ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"strafe_right\": %s,\n", frame.input.strafeRight ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"rotate_left\": %s,\n", frame.input.rotateLeft ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"rotate_right\": %s,\n", frame.input.rotateRight ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"shoot\": %s,\n", frame.input.shoot ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"jump\": %s,\n", frame.input.jump ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"sprint\": %s,\n", frame.input.sprint ? "true" : "false");
+        json += buffer;
+        sprintf(buffer, "        \"weapon_selected\": %d\n", frame.input.weaponSelected);
+        json += buffer;
+        json += "      },\n";
+        
+        // Enemies (only alive ones to reduce size)
+        json += "      \"enemies\": [\n";
+        int enemyCount = 0;
+        for(const auto& enemy : frame.enemies) {
+            if(!enemy.alive) continue;
+            if(enemyCount > 0) json += ",\n";
+            sprintf(buffer, "        {\"pos\": [%.3f, %.3f], \"health\": %d, \"type\": %d}", 
+                    enemy.x, enemy.y, enemy.health, enemy.type);
+            json += buffer;
+            enemyCount++;
+        }
+        json += "\n      ],\n";
+        
+        // Bullets count (just summary to reduce size)
+        sprintf(buffer, "      \"bullets_count\": %d,\n", (int)frame.bullets.size());
+        json += buffer;
+        sprintf(buffer, "      \"enemy_bullets_count\": %d\n", (int)frame.enemyBullets.size());
+        json += buffer;
+        
+        json += "    }";
+        exportedFrames++;
+        
+        // Print progress every 100 exported frames
+        if(exportedFrames % 100 == 0) {
+            printf("Exported %d frames...\n", exportedFrames);
+        }
+    }
+    
+    json += "\n  ]\n";
+    json += "}\n";
+    
+    printf("JSON export complete! Total size: %d bytes, Frames: %d\n", 
+           (int)json.length(), exportedFrames);
+    
+    // Download JSON file in browser using Emscripten
+    EM_ASM({
+        var jsonStr = UTF8ToString($0);
+        var blob = new Blob([jsonStr], {type: 'application/json'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'wolfenstein_replay_' + Date.now() + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('Replay exported successfully!');
+    }, json.c_str());
+}
+
+// Update replay (advance frames according to speed)
+void updateReplay() {
+    if(!isReplaying || recordedFrames.empty()) return;
+    if(replayPaused) return;
+    
+    // Variable speed playback with better precision
+    replayFrameAccumulator += replaySpeed;
+    
+    while(replayFrameAccumulator >= 1.0f) {
+        replayFrameAccumulator -= 1.0f;
+        replayCurrentFrame++;
+        
+        // Loop back to start
+        if(replayCurrentFrame >= (int)recordedFrames.size()) {
+            replayCurrentFrame = 0;
+            printf("REPLAY: Looping back to start\n");
+        }
+        
+        // Apply the frame
+        applyGameState(recordedFrames[replayCurrentFrame]);
+    }
+}
+
+// Handle replay controls
+void handleReplayInput() {
+    SDL_Event event;
+    while(SDL_PollEvent(&event)) {
+        if(event.type == SDL_QUIT) {
+            running = false;
+            return;
+        }
+        
+        // Handle mouse click on timeline and buttons
+        if(event.type == SDL_MOUSEBUTTONDOWN) {
+            int mouseX = event.button.x;
+            int mouseY = event.button.y;
+            
+            // Button definitions (matching drawReplayUI)
+            int buttonY = SCREEN_HEIGHT - 70;
+            int buttonSize = 30;
+            int buttonSpacing = 40;
+            
+            // Play/Pause button (x=20)
+            if(mouseX >= 20 && mouseX <= 20 + buttonSize && 
+               mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
+                replayPaused = !replayPaused;
+                printf("REPLAY: %s\n", replayPaused ? "PAUSED" : "PLAYING");
+            }
+            // Speed - button (x=60)
+            else if(mouseX >= 60 && mouseX <= 60 + buttonSize && 
+                    mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
+                if(replaySpeed > 0.25f) {
+                    if(replaySpeed == 1.0f) replaySpeed = 0.5f;
+                    else if(replaySpeed == 0.5f) replaySpeed = 0.25f;
+                    else if(replaySpeed > 1.0f) replaySpeed /= 2.0f;
+                    printf("REPLAY: Speed %.2fx\n", replaySpeed);
+                }
+            }
+            // Speed + button (x=100)
+            else if(mouseX >= 100 && mouseX <= 100 + buttonSize && 
+                    mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
+                if(replaySpeed < 8.0f) {
+                    if(replaySpeed == 0.25f) replaySpeed = 0.5f;
+                    else if(replaySpeed == 0.5f) replaySpeed = 1.0f;
+                    else replaySpeed *= 2.0f;
+                    printf("REPLAY: Speed %.2fx\n", replaySpeed);
+                }
+            }
+            // Restart button (x=140)
+            else if(mouseX >= 140 && mouseX <= 140 + buttonSize && 
+                    mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
+                replayCurrentFrame = 0;
+                replayPaused = false;
+                applyGameState(recordedFrames[0]);
+                printf("REPLAY: Restarted from beginning\n");
+            }
+            // Export button (x=180)
+            else if(mouseX >= 180 && mouseX <= 180 + buttonSize && 
+                    mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
+                exportReplayToJSON();
+            }
+            
+            // Timeline bar area (at bottom)
+            int timelineX = 200;
+            int timelineY = SCREEN_HEIGHT - 60;
+            int timelineWidth = SCREEN_WIDTH - 220;
+            int timelineHeight = 15;
+            
+            if(mouseX >= timelineX && mouseX <= timelineX + timelineWidth &&
+               mouseY >= timelineY && mouseY <= timelineY + timelineHeight) {
+                // Calculate which frame to jump to
+                float clickPercent = (float)(mouseX - timelineX) / timelineWidth;
+                int targetFrame = (int)(clickPercent * recordedFrames.size());
+                
+                if(targetFrame >= 0 && targetFrame < (int)recordedFrames.size()) {
+                    replayCurrentFrame = targetFrame;
+                    applyGameState(recordedFrames[replayCurrentFrame]);
+                    printf("REPLAY: Jumped to frame %d (%.1f%%)\n", replayCurrentFrame, clickPercent * 100);
+                }
+            }
+        }
+        
+        if(event.type == SDL_KEYDOWN) {
+            switch(event.key.keysym.sym) {
+                case SDLK_ESCAPE:
+                    exitReplay();
+                    break;
+                    
+                case SDLK_SPACE:
+                    replayPaused = !replayPaused;
+                    printf("REPLAY: %s\n", replayPaused ? "PAUSED" : "PLAYING");
+                    break;
+                    
+                case SDLK_LEFT:
+                    if(replayPaused && replayCurrentFrame > 0) {
+                        replayCurrentFrame--;
+                        applyGameState(recordedFrames[replayCurrentFrame]);
+                        printf("REPLAY: Frame %d / %d\n", replayCurrentFrame, (int)recordedFrames.size());
+                    }
+                    break;
+                    
+                case SDLK_RIGHT:
+                    if(replayPaused && replayCurrentFrame < (int)recordedFrames.size() - 1) {
+                        replayCurrentFrame++;
+                        applyGameState(recordedFrames[replayCurrentFrame]);
+                        printf("REPLAY: Frame %d / %d\n", replayCurrentFrame, (int)recordedFrames.size());
+                    }
+                    break;
+                    
+                case SDLK_q:
+                    // Skip backward 10 frames
+                    replayCurrentFrame -= 10;
+                    if(replayCurrentFrame < 0) replayCurrentFrame = 0;
+                    applyGameState(recordedFrames[replayCurrentFrame]);
+                    printf("REPLAY: Skipped to frame %d\n", replayCurrentFrame);
+                    break;
+                    
+                case SDLK_e:
+                    // Skip forward 10 frames
+                    replayCurrentFrame += 10;
+                    if(replayCurrentFrame >= (int)recordedFrames.size()) {
+                        replayCurrentFrame = (int)recordedFrames.size() - 1;
+                    }
+                    applyGameState(recordedFrames[replayCurrentFrame]);
+                    printf("REPLAY: Skipped to frame %d\n", replayCurrentFrame);
+                    break;
+                    
+                case SDLK_MINUS:
+                case SDLK_KP_MINUS:
+                    // Decrease speed
+                    if(replaySpeed > 0.25f) {
+                        if(replaySpeed == 1.0f) replaySpeed = 0.5f;
+                        else if(replaySpeed == 0.5f) replaySpeed = 0.25f;
+                        else if(replaySpeed > 1.0f) replaySpeed /= 2.0f;
+                        printf("REPLAY: Speed %.2fx\n", replaySpeed);
+                    }
+                    break;
+                    
+                case SDLK_EQUALS:
+                case SDLK_PLUS:
+                case SDLK_KP_PLUS:
+                    // Increase speed
+                    if(replaySpeed < 8.0f) {
+                        if(replaySpeed == 0.25f) replaySpeed = 0.5f;
+                        else if(replaySpeed == 0.5f) replaySpeed = 1.0f;
+                        else replaySpeed *= 2.0f;
+                        printf("REPLAY: Speed %.2fx\n", replaySpeed);
+                    }
+                    break;
+                    
+                case SDLK_r:
+                    // Restart replay
+                    replayCurrentFrame = 0;
+                    replayPaused = false;
+                    applyGameState(recordedFrames[0]);
+                    printf("REPLAY: Restarted from beginning\n");
+                    break;
+                    
+                case SDLK_x:
+                    // Export replay to JSON
+                    exportReplayToJSON();
+                    break;
+            }
+        }
+    }
 }
 
 void initEnemies() {
@@ -1075,11 +1741,17 @@ void handleInput() {
                 items.clear();
                 initItems();
                 
+                // REPLAY: Clear recording for new session
+                clearRecording();
+                
                 printf("Juego reiniciado!\n");
             }
         }
         return; // No procesar más input si está muerto
     }
+    
+    // Reset input state each frame
+    currentInput = InputState();
     
     SDL_Event event;
     while(SDL_PollEvent(&event)) {
@@ -1103,6 +1775,11 @@ void handleInput() {
             else if(event.key.keysym.sym == SDLK_4) {
                 currentWeapon = SHOTGUN;
                 printf("Arma: Escopeta\n");
+            }
+            // REPLAY: Enter replay mode with 'U'
+            else if(event.key.keysym.sym == SDLK_u) {
+                printf(">>> U key pressed! Recorded frames: %d\n", (int)recordedFrames.size());
+                startReplay();
             }
             // Disparar con B (A y D son para strafe)
             else if(event.key.keysym.sym == SDLK_b) {
@@ -1139,6 +1816,18 @@ void handleInput() {
     
     const Uint8* keystate = SDL_GetKeyboardState(NULL);
     double moveSpeed = 0.05;
+    
+    // REPLAY: Capture inputs for AI training
+    currentInput.forward = keystate[SDL_SCANCODE_W] || keystate[SDL_SCANCODE_UP];
+    currentInput.backward = keystate[SDL_SCANCODE_S] || keystate[SDL_SCANCODE_DOWN];
+    currentInput.strafeLeft = keystate[SDL_SCANCODE_A];
+    currentInput.strafeRight = keystate[SDL_SCANCODE_D];
+    currentInput.rotateLeft = keystate[SDL_SCANCODE_LEFT];
+    currentInput.rotateRight = keystate[SDL_SCANCODE_RIGHT];
+    currentInput.shoot = keystate[SDL_SCANCODE_B] || keystate[SDL_SCANCODE_LCTRL];
+    currentInput.jump = keystate[SDL_SCANCODE_SPACE];
+    currentInput.sprint = keystate[SDL_SCANCODE_LSHIFT];
+    currentInput.weaponSelected = currentWeapon;
     
     // Disparo continuo para ametralladora, láser y escopeta con B o Ctrl
     if(keystate[SDL_SCANCODE_B] || keystate[SDL_SCANCODE_LCTRL]) {
@@ -1232,6 +1921,305 @@ void handleInput() {
     
     // Check for item pickup
     checkItemPickup();
+}
+
+// Draw replay UI overlay
+void drawReplayUI() {
+    if(!isReplaying) return;
+    
+    // Semi-transparent overlay at top
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+    SDL_Rect topOverlay = {0, 0, SCREEN_WIDTH, 80};
+    SDL_RenderFillRect(renderer, &topOverlay);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // "REPLAY MODE" indicator (red circle + text)
+    SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
+    // Red circle (recording indicator style)
+    for(int i = 0; i < 20; i++) {
+        for(int j = 0; j < 20; j++) {
+            int dx = i - 10;
+            int dy = j - 10;
+            if(dx*dx + dy*dy <= 100) {
+                SDL_RenderDrawPoint(renderer, 20 + i, 20 + j);
+            }
+        }
+    }
+    
+    // "REPLAY" text (simple block letters)
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    // R
+    SDL_Rect r1 = {50, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &r1);
+    SDL_Rect r2 = {50, 15, 10, 3};
+    SDL_RenderFillRect(renderer, &r2);
+    SDL_Rect r3 = {50, 24, 10, 3};
+    SDL_RenderFillRect(renderer, &r3);
+    SDL_Rect r4 = {57, 15, 3, 10};
+    SDL_RenderFillRect(renderer, &r4);
+    SDL_Rect r5 = {57, 27, 3, 8};
+    SDL_RenderFillRect(renderer, &r5);
+    
+    // E
+    SDL_Rect e1 = {65, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &e1);
+    SDL_Rect e2 = {65, 15, 10, 3};
+    SDL_RenderFillRect(renderer, &e2);
+    SDL_Rect e3 = {65, 24, 8, 3};
+    SDL_RenderFillRect(renderer, &e3);
+    SDL_Rect e4 = {65, 32, 10, 3};
+    SDL_RenderFillRect(renderer, &e4);
+    
+    // P
+    SDL_Rect p1 = {80, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &p1);
+    SDL_Rect p2 = {80, 15, 10, 3};
+    SDL_RenderFillRect(renderer, &p2);
+    SDL_Rect p3 = {80, 24, 10, 3};
+    SDL_RenderFillRect(renderer, &p3);
+    SDL_Rect p4 = {87, 15, 3, 12};
+    SDL_RenderFillRect(renderer, &p4);
+    
+    // L
+    SDL_Rect l1 = {95, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &l1);
+    SDL_Rect l2 = {95, 32, 10, 3};
+    SDL_RenderFillRect(renderer, &l2);
+    
+    // A
+    SDL_Rect a1 = {110, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &a1);
+    SDL_Rect a2 = {110, 15, 10, 3};
+    SDL_RenderFillRect(renderer, &a2);
+    SDL_Rect a3 = {110, 24, 10, 3};
+    SDL_RenderFillRect(renderer, &a3);
+    SDL_Rect a4 = {117, 15, 3, 20};
+    SDL_RenderFillRect(renderer, &a4);
+    
+    // Y
+    SDL_Rect y1 = {125, 15, 3, 10};
+    SDL_RenderFillRect(renderer, &y1);
+    SDL_Rect y2 = {132, 15, 3, 10};
+    SDL_RenderFillRect(renderer, &y2);
+    SDL_Rect y3 = {128, 25, 3, 10};
+    SDL_RenderFillRect(renderer, &y3);
+    
+    // INFO PANEL - Clean design with colored bars
+    int totalFrames = (int)recordedFrames.size();
+    int infoX = SCREEN_WIDTH - 200;
+    
+    // Box background for better readability
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 150);
+    SDL_Rect infoBox = {infoX - 5, 10, 195, 65};
+    SDL_RenderFillRect(renderer, &infoBox);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(renderer, &infoBox);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // FRAME - Yellow bar indicator
+    SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+    SDL_Rect frameBar = {infoX, 15, 3, 12};
+    SDL_RenderFillRect(renderer, &frameBar);
+    
+    char frameText[64];
+    sprintf(frameText, "%d/%d", replayCurrentFrame, totalFrames);
+    int xPos = infoX + 10;
+    for(size_t i = 0; i < strlen(frameText); i++) {
+        if(frameText[i] >= '0' && frameText[i] <= '9') {
+            drawDigit(frameText[i] - '0', xPos, 15, 255, 255, 100);
+            xPos += 14;
+        } else {
+            xPos += 10; // Space for '/'
+        }
+    }
+    
+    // SPEED - Cyan bar indicator  
+    SDL_SetRenderDrawColor(renderer, 0, 255, 255, 255);
+    SDL_Rect speedBar = {infoX, 35, 3, 12};
+    SDL_RenderFillRect(renderer, &speedBar);
+    
+    char speedText[32];
+    sprintf(speedText, "%.2fx", replaySpeed);
+    xPos = infoX + 10;
+    for(size_t i = 0; i < strlen(speedText); i++) {
+        if(speedText[i] >= '0' && speedText[i] <= '9') {
+            drawDigit(speedText[i] - '0', xPos, 35, 100, 255, 255);
+            xPos += 14;
+        } else if(speedText[i] == '.') {
+            SDL_Rect dot = {xPos + 5, 45, 3, 3};
+            SDL_SetRenderDrawColor(renderer, 100, 255, 255, 255);
+            SDL_RenderFillRect(renderer, &dot);
+            xPos += 10;
+        } else {
+            xPos += 12; // Space for 'x'
+        }
+    }
+    
+    // TIME - Orange bar indicator
+    if(!recordedFrames.empty()) {
+        SDL_SetRenderDrawColor(renderer, 255, 180, 0, 255);
+        SDL_Rect timeBar = {infoX, 55, 3, 12};
+        SDL_RenderFillRect(renderer, &timeBar);
+        
+        double currentTime = recordedFrames[replayCurrentFrame].timestamp;
+        double totalTime = recordedFrames.back().timestamp;
+        
+        char timeText[32];
+        sprintf(timeText, "%.1f/%.1f", currentTime, totalTime);
+        xPos = infoX + 10;
+        for(size_t i = 0; i < strlen(timeText); i++) {
+            if(timeText[i] >= '0' && timeText[i] <= '9') {
+                drawDigit(timeText[i] - '0', xPos, 55, 255, 200, 100);
+                xPos += 14;
+            } else if(timeText[i] == '.') {
+                SDL_Rect dot = {xPos + 5, 65, 3, 3};
+                SDL_SetRenderDrawColor(renderer, 255, 200, 100, 255);
+                SDL_RenderFillRect(renderer, &dot);
+                xPos += 10;
+            } else {
+                xPos += 10; // Space for '/'
+            }
+        }
+    }
+    
+    // Paused indicator
+    if(replayPaused) {
+        SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+        // Draw "PAUSED"
+        SDL_Rect pause1 = {SCREEN_WIDTH/2 - 30, 15, 8, 20};
+        SDL_RenderFillRect(renderer, &pause1);
+        SDL_Rect pause2 = {SCREEN_WIDTH/2 - 15, 15, 8, 20};
+        SDL_RenderFillRect(renderer, &pause2);
+    }
+    
+    // Timeline bar at bottom
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+    SDL_Rect bottomOverlay = {0, SCREEN_HEIGHT - 80, SCREEN_WIDTH, 80};
+    SDL_RenderFillRect(renderer, &bottomOverlay);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // CONTROL BUTTONS
+    int buttonY = SCREEN_HEIGHT - 70;
+    int buttonSize = 30;
+    int buttonSpacing = 40;
+    int startX = 20;
+    
+    // Play/Pause button
+    SDL_SetRenderDrawColor(renderer, replayPaused ? 100 : 0, replayPaused ? 200 : 255, 100, 255);
+    SDL_Rect playPauseBtn = {startX, buttonY, buttonSize, buttonSize};
+    SDL_RenderFillRect(renderer, &playPauseBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &playPauseBtn);
+    // Draw icon
+    if(replayPaused) {
+        // Play triangle
+        for(int i = 0; i < buttonSize/2; i++) {
+            SDL_RenderDrawLine(renderer, startX + 8 + i/2, buttonY + 8 + i, 
+                             startX + 8 + i/2, buttonY + 22 - i);
+        }
+    } else {
+        // Pause bars
+        SDL_Rect bar1 = {startX + 9, buttonY + 8, 4, 14};
+        SDL_Rect bar2 = {startX + 17, buttonY + 8, 4, 14};
+        SDL_RenderFillRect(renderer, &bar1);
+        SDL_RenderFillRect(renderer, &bar2);
+    }
+    
+    // Speed - button
+    startX += buttonSpacing;
+    SDL_SetRenderDrawColor(renderer, 255, 150, 0, 255);
+    SDL_Rect speedMinusBtn = {startX, buttonY, buttonSize, buttonSize};
+    SDL_RenderFillRect(renderer, &speedMinusBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &speedMinusBtn);
+    SDL_Rect minus = {startX + 7, buttonY + 13, 16, 4};
+    SDL_RenderFillRect(renderer, &minus);
+    
+    // Speed + button
+    startX += buttonSpacing;
+    SDL_SetRenderDrawColor(renderer, 255, 150, 0, 255);
+    SDL_Rect speedPlusBtn = {startX, buttonY, buttonSize, buttonSize};
+    SDL_RenderFillRect(renderer, &speedPlusBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &speedPlusBtn);
+    SDL_Rect plusH = {startX + 7, buttonY + 13, 16, 4};
+    SDL_Rect plusV = {startX + 13, buttonY + 7, 4, 16};
+    SDL_RenderFillRect(renderer, &plusH);
+    SDL_RenderFillRect(renderer, &plusV);
+    
+    // Restart button
+    startX += buttonSpacing;
+    SDL_SetRenderDrawColor(renderer, 100, 150, 255, 255);
+    SDL_Rect restartBtn = {startX, buttonY, buttonSize, buttonSize};
+    SDL_RenderFillRect(renderer, &restartBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &restartBtn);
+    // R icon
+    SDL_Rect rBar1 = {startX + 10, buttonY + 8, 3, 14};
+    SDL_Rect rBar2 = {startX + 10, buttonY + 8, 8, 3};
+    SDL_Rect rBar3 = {startX + 10, buttonY + 13, 8, 3};
+    SDL_RenderFillRect(renderer, &rBar1);
+    SDL_RenderFillRect(renderer, &rBar2);
+    SDL_RenderFillRect(renderer, &rBar3);
+    
+    // Export button
+    startX += buttonSpacing;
+    SDL_SetRenderDrawColor(renderer, 200, 100, 200, 255);
+    SDL_Rect exportBtn = {startX, buttonY, buttonSize, buttonSize};
+    SDL_RenderFillRect(renderer, &exportBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &exportBtn);
+    // X icon
+    SDL_Rect xBar1 = {startX + 8, buttonY + 8, 14, 3};
+    SDL_Rect xBar2 = {startX + 8, buttonY + 19, 14, 3};
+    SDL_RenderFillRect(renderer, &xBar1);
+    SDL_RenderFillRect(renderer, &xBar2);
+    
+    // Timeline background
+    int timelineX = 200;
+    int timelineY = SCREEN_HEIGHT - 60;
+    int timelineWidth = SCREEN_WIDTH - 220;
+    int timelineHeight = 15;
+    
+    SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+    SDL_Rect timelineBg = {timelineX, timelineY, timelineWidth, timelineHeight};
+    SDL_RenderFillRect(renderer, &timelineBg);
+    
+    // Timeline progress
+    if(totalFrames > 0) {
+        int progressWidth = (replayCurrentFrame * timelineWidth) / totalFrames;
+        SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+        SDL_Rect timelineProgress = {timelineX, timelineY, progressWidth, timelineHeight};
+        SDL_RenderFillRect(renderer, &timelineProgress);
+        
+        // Current position marker
+        int markerX = timelineX + progressWidth;
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect marker = {markerX - 2, timelineY - 5, 4, timelineHeight + 10};
+        SDL_RenderFillRect(renderer, &marker);
+    }
+    
+    // Timeline border
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &timelineBg);
+    
+    // Controls help text (small)
+    SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
+    SDL_Rect help1 = {20, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help1); // Simulate "SPACE=pause"
+    SDL_Rect help2 = {100, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help2); // Simulate "←→=step"
+    SDL_Rect help3 = {180, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help3); // Simulate "Q/E=skip"
+    SDL_Rect help4 = {260, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help4); // Simulate "±=speed"
+    SDL_Rect help5 = {340, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help5); // Simulate "R=restart"
+    SDL_Rect help6 = {420, SCREEN_HEIGHT - 20, 8, 8};
+    SDL_RenderFillRect(renderer, &help6); // Simulate "ESC=exit"
 }
 
 void render() {
@@ -1821,6 +2809,9 @@ void render() {
         SDL_RenderDrawRect(renderer, &restartMsg);
     }
     
+    // Draw replay UI overlay (if in replay mode)
+    drawReplayUI();
+    
     SDL_RenderPresent(renderer);
 }
 
@@ -1830,12 +2821,27 @@ void mainLoop() {
     double deltaTime = currentTime - lastTime;
     lastTime = currentTime;
     
-    handleInput();
-    updateEnemies(deltaTime);
+    if(!isReplaying) {
+        // Normal gameplay mode
+        handleInput();
+        updateEnemies(deltaTime);
+        
+        // Record frame automatically
+        if(isRecording && !gameOver && !gameWon) {
+            recordFrame(currentTime);
+        }
+    } else {
+        // Replay mode
+        handleReplayInput();
+        updateReplay();
+    }
+    
     render();
 }
 
 int main(int argc, char* argv[]) {
+    printf("🔥🔥🔥 WOLFENSTEIN WITH REPLAY - BUILD 2025-11-15 00:43 🔥🔥🔥\n");
+    
     srand(time(NULL));
     
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
@@ -1874,6 +2880,10 @@ int main(int argc, char* argv[]) {
     initItems();
     generateSounds();
     
+    printf("===========================================\n");
+    printf(">>> REPLAY SYSTEM INITIALIZED\n");
+    printf(">>> Recording: %s, Max frames: %d\n", isRecording ? "ACTIVE" : "INACTIVE", MAX_RECORDED_FRAMES);
+    printf(">>> Press 'U' to start replay mode\n");
     printf("===========================================\n");
     printf("  Wolfenstein 3D - MEGA Enhanced Edition!\n");
     printf("===========================================\n");
