@@ -562,198 +562,224 @@ void exitReplay() {
     printf("REPLAY MODE: Exited. Returning to gameplay.\n");
 }
 
-// Export replay to JSON for AI training
-void exportReplayToJSON() {
+// Export replay to CSV (much simpler and faster than JSON!)
+void exportReplayToCSV() {
     if(recordedFrames.empty()) {
         printf("ERROR: No frames to export!\n");
         return;
     }
     
-    printf("Exporting replay to JSON... (%d frames)\n", (int)recordedFrames.size());
+    printf("Exporting replay to CSV... (%d frames)\n", (int)recordedFrames.size());
     
-    // Start building JSON string
-    std::string json = "{\n";
-    
-    // Metadata
-    json += "  \"metadata\": {\n";
-    
+    std::string csv = "";
     char buffer[512];
-    sprintf(buffer, "    \"total_frames\": %d,\n", (int)recordedFrames.size());
-    json += buffer;
     
-    double duration = recordedFrames.back().timestamp;
-    sprintf(buffer, "    \"duration_seconds\": %.2f,\n", duration);
-    json += buffer;
-    
+    // Header with metadata
+    csv += "# Wolfenstein 3D Replay - Simple format (player data only)\n";
+    sprintf(buffer, "# Total Frames: %d\n", (int)recordedFrames.size());
+    csv += buffer;
+    sprintf(buffer, "# Duration: %.2f seconds\n", recordedFrames.back().timestamp);
+    csv += buffer;
     const char* result = gameWon ? "victory" : (gameOver ? "defeat" : "ongoing");
-    sprintf(buffer, "    \"result\": \"%s\",\n", result);
-    json += buffer;
+    sprintf(buffer, "# Result: %s, Kills: %d, Final Health: %d\n", 
+            result, recordedFrames.back().kills, recordedFrames.back().playerHealth);
+    csv += buffer;
     
-    sprintf(buffer, "    \"final_kills\": %d,\n", recordedFrames.back().kills);
-    json += buffer;
+    // Column headers
+    csv += "frame,time,posX,posY,dirX,dirY,planeX,planeY,health,ammo,kills,bullets,weapon,roll,vertPos,vertVel,fwd,back,left,right,rotL,rotR,shoot,jump,sprint,wpn\n";
     
-    sprintf(buffer, "    \"final_health\": %d,\n", recordedFrames.back().playerHealth);
-    json += buffer;
-    
-    double accuracy = recordedFrames.back().bulletsFired > 0 ? 
-                     (double)recordedFrames.back().kills / recordedFrames.back().bulletsFired : 0.0;
-    sprintf(buffer, "    \"accuracy\": %.4f\n", accuracy);
-    json += buffer;
-    
-    json += "  },\n";
-    
-    // Frames array
-    json += "  \"frames\": [\n";
-    
-    // Export frames (sample every 5 frames to reduce size, or all if < 600 frames)
-    int frameStep = (recordedFrames.size() > 600) ? 5 : 1;
-    int exportedFrames = 0;
-    
-    for(size_t i = 0; i < recordedFrames.size(); i += frameStep) {
-        const GameStateSnapshot& frame = recordedFrames[i];
+    // Export player data only (one line per frame)
+    for(size_t i = 0; i < recordedFrames.size(); i++) {
+        const GameStateSnapshot& f = recordedFrames[i];
         
-        if(exportedFrames > 0) json += ",\n";
+        sprintf(buffer, "%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                f.frameNumber, f.timestamp,
+                f.posX, f.posY, f.dirX, f.dirY, f.planeX, f.planeY,
+                f.playerHealth, f.ammo, f.kills, f.bulletsFired, f.currentWeapon,
+                f.cameraRoll, f.verticalPosition, f.verticalVelocity,
+                f.input.forward, f.input.backward, f.input.strafeLeft, f.input.strafeRight,
+                f.input.rotateLeft, f.input.rotateRight, f.input.shoot, f.input.jump,
+                f.input.sprint, f.input.weaponSelected);
+        csv += buffer;
         
-        json += "    {\n";
-        
-        sprintf(buffer, "      \"frame\": %d,\n", frame.frameNumber);
-        json += buffer;
-        
-        sprintf(buffer, "      \"timestamp\": %.3f,\n", frame.timestamp);
-        json += buffer;
-        
-        // Player state
-        json += "      \"player\": {\n";
-        sprintf(buffer, "        \"pos\": [%.3f, %.3f],\n", frame.posX, frame.posY);
-        json += buffer;
-        sprintf(buffer, "        \"dir\": [%.3f, %.3f],\n", frame.dirX, frame.dirY);
-        json += buffer;
-        sprintf(buffer, "        \"health\": %d,\n", frame.playerHealth);
-        json += buffer;
-        sprintf(buffer, "        \"ammo\": %d,\n", frame.ammo);
-        json += buffer;
-        sprintf(buffer, "        \"weapon\": %d,\n", frame.currentWeapon);
-        json += buffer;
-        sprintf(buffer, "        \"kills\": %d\n", frame.kills);
-        json += buffer;
-        json += "      },\n";
-        
-        // Input state
-        json += "      \"input\": {\n";
-        sprintf(buffer, "        \"forward\": %s,\n", frame.input.forward ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"backward\": %s,\n", frame.input.backward ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"strafe_left\": %s,\n", frame.input.strafeLeft ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"strafe_right\": %s,\n", frame.input.strafeRight ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"rotate_left\": %s,\n", frame.input.rotateLeft ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"rotate_right\": %s,\n", frame.input.rotateRight ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"shoot\": %s,\n", frame.input.shoot ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"jump\": %s,\n", frame.input.jump ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"sprint\": %s,\n", frame.input.sprint ? "true" : "false");
-        json += buffer;
-        sprintf(buffer, "        \"weapon_selected\": %d\n", frame.input.weaponSelected);
-        json += buffer;
-        json += "      },\n";
-        
-        // Enemies (only alive ones to reduce size)
-        json += "      \"enemies\": [\n";
-        int enemyCount = 0;
-        for(const auto& enemy : frame.enemies) {
-            if(!enemy.alive) continue;
-            if(enemyCount > 0) json += ",\n";
-            sprintf(buffer, "        {\"pos\": [%.3f, %.3f], \"health\": %d, \"type\": %d}", 
-                    enemy.x, enemy.y, enemy.health, enemy.type);
-            json += buffer;
-            enemyCount++;
-        }
-        json += "\n      ],\n";
-        
-        // Bullets count (just summary to reduce size)
-        sprintf(buffer, "      \"bullets_count\": %d,\n", (int)frame.bullets.size());
-        json += buffer;
-        sprintf(buffer, "      \"enemy_bullets_count\": %d\n", (int)frame.enemyBullets.size());
-        json += buffer;
-        
-        json += "    }";
-        exportedFrames++;
-        
-        // Print progress every 100 exported frames
-        if(exportedFrames % 100 == 0) {
-            printf("Exported %d frames...\n", exportedFrames);
+        // Progress feedback
+        if((i + 1) % 1000 == 0) {
+            printf("Exported %d/%d frames...\n", (int)(i + 1), (int)recordedFrames.size());
         }
     }
     
-    json += "\n  ]\n";
-    json += "}\n";
+    printf("CSV export complete! Size: %d bytes, Frames: %d\n", 
+           (int)csv.length(), (int)recordedFrames.size());
     
-    printf("JSON export complete! Total size: %d bytes, Frames: %d\n", 
-           (int)json.length(), exportedFrames);
-    
-    // Download JSON file in browser using Emscripten
+    // Download CSV file
     EM_ASM({
-        var jsonStr = UTF8ToString($0);
-        var blob = new Blob([jsonStr], {type: 'application/json'});
+        var csvStr = UTF8ToString($0);
+        var blob = new Blob([csvStr], {type: 'text/csv'});
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'wolfenstein_replay_' + Date.now() + '.json';
+        a.download = 'wolfenstein_replay_' + Date.now() + '.csv';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        console.log('Replay exported successfully!');
-    }, json.c_str());
+        console.log('CSV Replay exported successfully!');
+    }, csv.c_str());
 }
 
-// Load replay from JSON (called from JavaScript)
-extern "C" {
-    void EMSCRIPTEN_KEEPALIVE loadReplayFromJSON(const char* jsonData) {
-        printf(">>> loadReplayFromJSON called, data length: %d\n", (int)strlen(jsonData));
+// Legacy function - keep for compatibility
+void exportReplayToJSON() {
+    printf("JSON export is deprecated. Use CSV instead for better performance.\n");
+    exportReplayToCSV();
+}
+
+// Parse a single CSV line - can be Player, Enemy, Bullet, Item, or Laser
+// ParsedLine struct removed - using simple direct parsing now
+
+// Simple CSV parser - player data only (STABLE VERSION)
+bool parseCSVLine(const char* line, GameStateSnapshot& snapshot) {
+    // Skip comments, empty lines, and header
+    if(!line || line[0] == '#' || line[0] == '\n' || line[0] == '\0' || line[0] == 'f') {
+        return false;
+    }
+    
+    // Initialize with safe defaults
+    snapshot.frameNumber = 0;
+    snapshot.timestamp = 0.0;
+    snapshot.posX = 5.0;
+    snapshot.posY = 5.0;
+    snapshot.dirX = -1.0;
+    snapshot.dirY = 0.0;
+    snapshot.planeX = 0.0;
+    snapshot.planeY = 0.66;
+    snapshot.playerHealth = 100;
+    snapshot.ammo = 50;
+    snapshot.kills = 0;
+    snapshot.bulletsFired = 0;
+    snapshot.currentWeapon = 1;
+    snapshot.cameraRoll = 0.0;
+    snapshot.verticalPosition = 0.0;
+    snapshot.verticalVelocity = 0.0;
+    
+    // Parse the CSV line
+    int fwd, back, left, right, rotL, rotR, shoot, jump, sprint;
+    int numParsed = sscanf(line, "%d,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%d,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                       &snapshot.frameNumber, &snapshot.timestamp,
+                       &snapshot.posX, &snapshot.posY,
+                       &snapshot.dirX, &snapshot.dirY,
+                       &snapshot.planeX, &snapshot.planeY,
+                       &snapshot.playerHealth, &snapshot.ammo,
+                       &snapshot.kills, &snapshot.bulletsFired,
+                       &snapshot.currentWeapon,
+                       &snapshot.cameraRoll, &snapshot.verticalPosition, &snapshot.verticalVelocity,
+                       &fwd, &back, &left, &right,
+                       &rotL, &rotR, &shoot, &jump,
+                       &sprint, &snapshot.input.weaponSelected);
+    
+    // Convert int inputs to bools
+    snapshot.input.forward = (fwd != 0);
+    snapshot.input.backward = (back != 0);
+    snapshot.input.strafeLeft = (left != 0);
+    snapshot.input.strafeRight = (right != 0);
+    snapshot.input.rotateLeft = (rotL != 0);
+    snapshot.input.rotateRight = (rotR != 0);
+    snapshot.input.shoot = (shoot != 0);
+    snapshot.input.jump = (jump != 0);
+    snapshot.input.sprint = (sprint != 0);
+    
+    // Clear entity vectors (not in simple format)
+    snapshot.enemies.clear();
+    snapshot.bullets.clear();
+    snapshot.items.clear();
+    snapshot.laserBeams.clear();
+    
+    // Valid if we parsed at least the core fields (frame, time, pos, dir)
+    return (numParsed >= 8);
+}
+
+// createEmptySnapshot removed - initialization happens directly in parseCSVLine now
+
+// Load replay from CSV - simple format (STABLE VERSION)
+void loadReplayFromCSV(const char* csvData) {
+    printf(">>> loadReplayFromCSV called (simple format - player only)\n");
+    
+    // Clear current recording
+    recordedFrames.clear();
+    currentFrameNumber = 0;
+    
+    // Reserve space
+    recordedFrames.reserve(10000);
+    
+    // Parse line by line
+    const char* lineStart = csvData;
+    const char* lineEnd = csvData;
+    char lineBuffer[512];
+    int framesLoaded = 0;
+    
+    while(*lineStart != '\0') {
+        // Find end of line
+        lineEnd = lineStart;
+        while(*lineEnd != '\n' && *lineEnd != '\0') lineEnd++;
         
-        // Clear current recording
-        recordedFrames.clear();
-        currentFrameNumber = 0;
-        
-        // Simple JSON parsing - this is a basic implementation
-        // In a real scenario, you'd want a proper JSON library
-        std::string json(jsonData);
-        
-        // Check if JSON contains required fields
-        if(json.find("\"frames\"") == std::string::npos || 
-           json.find("\"metadata\"") == std::string::npos) {
-            printf("ERROR: Invalid JSON format - missing required fields\n");
-            jsonFileValid = false;
-            return;
+        // Copy line to buffer
+        int lineLen = lineEnd - lineStart;
+        if(lineLen > 0 && lineLen < 512) {
+            memcpy(lineBuffer, lineStart, lineLen);
+            lineBuffer[lineLen] = '\0';
+            
+            // Parse this line
+            GameStateSnapshot snapshot;
+            if(parseCSVLine(lineBuffer, snapshot)) {
+                recordedFrames.push_back(snapshot);
+                framesLoaded++;
+                
+                if(framesLoaded % 1000 == 0) {
+                    printf("Loaded %d frames...\n", framesLoaded);
+                }
+            }
         }
         
-        // Count frames
-        int frameCount = 0;
-        size_t pos = 0;
-        while((pos = json.find("\"frame\":", pos)) != std::string::npos) {
-            frameCount++;
-            pos++;
-        }
-        
-        if(frameCount == 0) {
-            printf("ERROR: No frames found in JSON\n");
-            jsonFileValid = false;
-            return;
-        }
-        
-        printf("JSON validation OK: Found %d frames\n", frameCount);
+        // Move to next line
+        lineStart = (*lineEnd == '\n') ? lineEnd + 1 : lineEnd;
+    }
+    
+    if(!recordedFrames.empty()) {
+        printf("✓ CSV loaded successfully: %d frames\n", (int)recordedFrames.size());
+        printf("  Duration: %.2f seconds\n", recordedFrames.back().timestamp);
+        printf("  Final health: %d, Kills: %d\n", 
+               recordedFrames.back().playerHealth, recordedFrames.back().kills);
         jsonFileValid = true;
         jsonFileLoaded = true;
+    } else {
+        printf("ERROR: Failed to load CSV - no valid frames found\n");
+        jsonFileValid = false;
+        jsonFileLoaded = true;
+    }
+}
+
+// Exported functions for JavaScript
+extern "C" {
+    // Main load function - detects format automatically
+    void EMSCRIPTEN_KEEPALIVE loadReplayFromJSON(const char* data) {
+        if(data == nullptr || strlen(data) < 10) {
+            printf("ERROR: Invalid replay data\n");
+            jsonFileValid = false;
+            jsonFileLoaded = true;
+            return;
+        }
         
-        // For now, we'll just validate - actual replay loading would require full JSON parsing
-        // This is a simplified version for the demo
-        printf("Replay JSON loaded successfully! Ready to play.\n");
+        // Auto-detect format
+        std::string str(data, std::min(strlen(data), (size_t)100));
+        
+        if(str.find("# Wolfenstein") != std::string::npos || str.find("frame,time") != std::string::npos) {
+            printf(">>> Detected CSV format\n");
+            loadReplayFromCSV(data);
+        } else {
+            printf("ERROR: Unknown replay format\n");
+            printf("Please use CSV format (.csv files only)\n");
+            jsonFileValid = false;
+            jsonFileLoaded = true;
+        }
     }
     
     void EMSCRIPTEN_KEEPALIVE setJsonFilename(const char* filename) {
@@ -800,7 +826,7 @@ void handleReplayInput() {
             int mouseY = event.button.y;
             
             // Button definitions (matching drawReplayUI)
-            int buttonY = SCREEN_HEIGHT - 70;
+            int buttonY = SCREEN_HEIGHT - 75;
             int buttonSize = 30;
             int buttonSpacing = 40;
             
@@ -841,14 +867,14 @@ void handleReplayInput() {
             // Export button (x=180)
             else if(mouseX >= 180 && mouseX <= 180 + buttonSize && 
                     mouseY >= buttonY && mouseY <= buttonY + buttonSize) {
-                exportReplayToJSON();
+                exportReplayToCSV();
             }
             
-            // Timeline bar area (at bottom)
-            int timelineX = 200;
-            int timelineY = SCREEN_HEIGHT - 60;
-            int timelineWidth = SCREEN_WIDTH - 220;
-            int timelineHeight = 15;
+            // Timeline bar area (at bottom - NEW POSITION)
+            int timelineX = 20;
+            int timelineY = SCREEN_HEIGHT - 35;
+            int timelineWidth = SCREEN_WIDTH - 40;
+            int timelineHeight = 20;
             
             if(mouseX >= timelineX && mouseX <= timelineX + timelineWidth &&
                mouseY >= timelineY && mouseY <= timelineY + timelineHeight) {
@@ -941,8 +967,8 @@ void handleReplayInput() {
                     break;
                     
                 case SDLK_x:
-                    // Export replay to JSON
-                    exportReplayToJSON();
+                    // Export replay to CSV
+                    exportReplayToCSV();
                     break;
             }
         }
@@ -950,24 +976,12 @@ void handleReplayInput() {
 }
 
 void initEnemies() {
-    // Spawn soldados y perros mezclados
-    enemies.push_back(Enemy(5, 5, SOLDIER));
-    enemies.push_back(Enemy(35, 5, DOG));
-    enemies.push_back(Enemy(10, 10, SOLDIER));
-    enemies.push_back(Enemy(30, 10, DOG));
-    enemies.push_back(Enemy(15, 15, SOLDIER));
-    enemies.push_back(Enemy(25, 15, DOG));
-    enemies.push_back(Enemy(8, 25, SOLDIER));
-    enemies.push_back(Enemy(35, 25, DOG));
-    enemies.push_back(Enemy(12, 30, SOLDIER));
-    enemies.push_back(Enemy(28, 30, DOG));
-    enemies.push_back(Enemy(18, 20, SOLDIER));
-    enemies.push_back(Enemy(20, 35, DOG));
-    enemies.push_back(Enemy(33, 33, SOLDIER));
-    enemies.push_back(Enemy(7, 18, DOG));
-    enemies.push_back(Enemy(35, 15, SOLDIER));
+    // Solo 2 enemigos en el centro del mapa
+    enemies.push_back(Enemy(19, 20, DOG));      // Perro
+    enemies.push_back(Enemy(21, 20, SOLDIER));  // Soldado
     
     totalEnemies = enemies.size(); // Guardar el total de enemigos
+    printf("Enemigos inicializados: %d (1 perro, 1 soldado)\n", totalEnemies);
 }
 
 void initItems() {
@@ -1071,8 +1085,8 @@ void drawWeapon() {
         SDL_RenderFillRect(renderer, &grip);
     }
     
-    // Muzzle flash when shooting
-    if(weaponState == 1 && weaponFrame < 2) {
+    // Muzzle flash when shooting (not in replay mode)
+    if(weaponState == 1 && weaponFrame < 2 && !isReplaying) {
         SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
         SDL_Rect flash = {weaponX + 45, weaponY - 15, 30, 20};
         SDL_RenderFillRect(renderer, &flash);
@@ -1081,6 +1095,190 @@ void drawWeapon() {
         SDL_Rect flash2 = {weaponX + 35, weaponY - 25, 50, 30};
         SDL_RenderFillRect(renderer, &flash2);
     }
+}
+
+// Bitmap font: 5x7 pixels per character
+void drawChar(char c, int x, int y, int r, int g, int b) {
+    SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+    
+    // Convert to uppercase
+    if(c >= 'a' && c <= 'z') c = c - 32;
+    
+    // 5x7 bitmap patterns for each character
+    static const bool patterns[][7][5] = {
+        // A
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,1,1,1,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1}},
+        // B
+        {{1,1,1,1,0},{1,0,0,0,1},{1,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,1,1,1,0}},
+        // C
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,1},{0,1,1,1,0}},
+        // D
+        {{1,1,1,0,0},{1,0,0,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,1,0},{1,1,1,0,0}},
+        // E
+        {{1,1,1,1,1},{1,0,0,0,0},{1,1,1,1,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,1,1,1,1}},
+        // F
+        {{1,1,1,1,1},{1,0,0,0,0},{1,1,1,1,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0}},
+        // G
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,0},{1,0,1,1,1},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // H
+        {{1,0,0,0,1},{1,0,0,0,1},{1,1,1,1,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1}},
+        // I
+        {{1,1,1,1,1},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{1,1,1,1,1}},
+        // J
+        {{0,0,1,1,1},{0,0,0,1,0},{0,0,0,1,0},{0,0,0,1,0},{0,0,0,1,0},{1,0,0,1,0},{0,1,1,0,0}},
+        // K
+        {{1,0,0,0,1},{1,0,0,1,0},{1,1,1,0,0},{1,0,1,0,0},{1,0,0,1,0},{1,0,0,0,1},{1,0,0,0,1}},
+        // L
+        {{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,1,1,1,1}},
+        // M
+        {{1,0,0,0,1},{1,1,0,1,1},{1,0,1,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1}},
+        // N
+        {{1,0,0,0,1},{1,1,0,0,1},{1,0,1,0,1},{1,0,0,1,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1}},
+        // O
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // P
+        {{1,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,1,1,1,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0}},
+        // Q
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,1,0,1},{1,0,0,1,0},{0,1,1,0,1}},
+        // R
+        {{1,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{1,1,1,1,0},{1,0,1,0,0},{1,0,0,1,0},{1,0,0,0,1}},
+        // S
+        {{0,1,1,1,1},{1,0,0,0,0},{1,0,0,0,0},{0,1,1,1,0},{0,0,0,0,1},{0,0,0,0,1},{1,1,1,1,0}},
+        // T
+        {{1,1,1,1,1},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0}},
+        // U
+        {{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // V
+        {{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{0,1,0,1,0},{0,0,1,0,0}},
+        // W
+        {{1,0,0,0,1},{1,0,0,0,1},{1,0,0,0,1},{1,0,1,0,1},{1,0,1,0,1},{1,0,1,0,1},{0,1,0,1,0}},
+        // X
+        {{1,0,0,0,1},{1,0,0,0,1},{0,1,0,1,0},{0,0,1,0,0},{0,1,0,1,0},{1,0,0,0,1},{1,0,0,0,1}},
+        // Y
+        {{1,0,0,0,1},{1,0,0,0,1},{0,1,0,1,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0}},
+        // Z
+        {{1,1,1,1,1},{0,0,0,0,1},{0,0,0,1,0},{0,0,1,0,0},{0,1,0,0,0},{1,0,0,0,0},{1,1,1,1,1}},
+        // 0
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,1,1},{1,0,1,0,1},{1,1,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // 1
+        {{0,0,1,0,0},{0,1,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,0,1,0,0},{0,1,1,1,0}},
+        // 2
+        {{0,1,1,1,0},{1,0,0,0,1},{0,0,0,0,1},{0,0,0,1,0},{0,0,1,0,0},{0,1,0,0,0},{1,1,1,1,1}},
+        // 3
+        {{1,1,1,1,0},{0,0,0,0,1},{0,0,0,0,1},{0,1,1,1,0},{0,0,0,0,1},{0,0,0,0,1},{1,1,1,1,0}},
+        // 4
+        {{0,0,0,1,0},{0,0,1,1,0},{0,1,0,1,0},{1,0,0,1,0},{1,1,1,1,1},{0,0,0,1,0},{0,0,0,1,0}},
+        // 5
+        {{1,1,1,1,1},{1,0,0,0,0},{1,1,1,1,0},{0,0,0,0,1},{0,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // 6
+        {{0,0,1,1,0},{0,1,0,0,0},{1,0,0,0,0},{1,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // 7
+        {{1,1,1,1,1},{0,0,0,0,1},{0,0,0,1,0},{0,0,1,0,0},{0,1,0,0,0},{0,1,0,0,0},{0,1,0,0,0}},
+        // 8
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,0}},
+        // 9
+        {{0,1,1,1,0},{1,0,0,0,1},{1,0,0,0,1},{0,1,1,1,1},{0,0,0,0,1},{0,0,0,1,0},{0,1,1,0,0}},
+        // : (colon)
+        {{0,0,0,0,0},{0,0,1,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,1,0,0},{0,0,0,0,0}},
+        // Space (always empty)
+        {{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0},{0,0,0,0,0}}
+    };
+    
+    int patternIndex = -1;
+    if(c >= 'A' && c <= 'Z') patternIndex = c - 'A';
+    else if(c >= '0' && c <= '9') patternIndex = 26 + (c - '0');
+    else if(c == ':') patternIndex = 36;
+    else if(c == ' ') patternIndex = 37;
+    else return; // Unknown character
+    
+    // Draw the pattern
+    for(int row = 0; row < 7; row++) {
+        for(int col = 0; col < 5; col++) {
+            if(patterns[patternIndex][row][col]) {
+                SDL_Rect pixel = {x + col, y + row, 1, 1};
+                SDL_RenderFillRect(renderer, &pixel);
+            }
+        }
+    }
+}
+
+// Draw text string
+void drawText(const char* text, int x, int y, int r, int g, int b, int scale = 1) {
+    int cursorX = x;
+    for(int i = 0; text[i] != '\0'; i++) {
+        drawChar(text[i], cursorX, y, r, g, b);
+        cursorX += (6 * scale); // Spacing increases with scale
+    }
+}
+
+// Draw enemy sprite - DOG
+void drawDogSprite(int x, int y, int size) {
+    // Body (brown)
+    SDL_SetRenderDrawColor(renderer, 120, 80, 40, 255);
+    SDL_Rect body = {x + size/4, y + size/2, size/2, size/3};
+    SDL_RenderFillRect(renderer, &body);
+    
+    // Head
+    SDL_Rect head = {x + size/3, y + size/3, size/3, size/4};
+    SDL_RenderFillRect(renderer, &head);
+    
+    // Ears
+    SDL_SetRenderDrawColor(renderer, 100, 60, 30, 255);
+    SDL_Rect ear1 = {x + size/3, y + size/4, size/8, size/6};
+    SDL_Rect ear2 = {x + size/2, y + size/4, size/8, size/6};
+    SDL_RenderFillRect(renderer, &ear1);
+    SDL_RenderFillRect(renderer, &ear2);
+    
+    // Eyes (red - aggressive)
+    SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
+    SDL_Rect eye1 = {x + size/3 + 2, y + size/3 + 2, 3, 3};
+    SDL_Rect eye2 = {x + size/2 - 2, y + size/3 + 2, 3, 3};
+    SDL_RenderFillRect(renderer, &eye1);
+    SDL_RenderFillRect(renderer, &eye2);
+    
+    // Legs
+    SDL_SetRenderDrawColor(renderer, 100, 60, 30, 255);
+    for(int i = 0; i < 4; i++) {
+        SDL_Rect leg = {x + size/4 + i*size/8, y + size*3/4, size/12, size/4};
+        SDL_RenderFillRect(renderer, &leg);
+    }
+}
+
+// Draw enemy sprite - SOLDIER
+void drawSoldierSprite(int x, int y, int size) {
+    // Helmet (gray)
+    SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+    SDL_Rect helmet = {x + size/3, y + size/6, size/3, size/5};
+    SDL_RenderFillRect(renderer, &helmet);
+    
+    // Face (skin)
+    SDL_SetRenderDrawColor(renderer, 200, 150, 120, 255);
+    SDL_Rect face = {x + size/3, y + size/3, size/3, size/4};
+    SDL_RenderFillRect(renderer, &face);
+    
+    // Uniform (blue/gray)
+    SDL_SetRenderDrawColor(renderer, 60, 80, 120, 255);
+    SDL_Rect body = {x + size/4, y + size*7/12, size/2, size*5/12};
+    SDL_RenderFillRect(renderer, &body);
+    
+    // Gun (black)
+    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+    SDL_Rect gun = {x + size*3/4, y + size*2/3, size/4, size/12};
+    SDL_RenderFillRect(renderer, &gun);
+    
+    // Eyes
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_Rect eye1 = {x + size/3 + 3, y + size/3 + 5, 2, 2};
+    SDL_Rect eye2 = {x + size/2 - 3, y + size/3 + 5, 2, 2};
+    SDL_RenderFillRect(renderer, &eye1);
+    SDL_RenderFillRect(renderer, &eye2);
+    
+    // Legs
+    SDL_SetRenderDrawColor(renderer, 40, 60, 80, 255);
+    SDL_Rect leg1 = {x + size/3, y + size - size/6, size/6, size/6};
+    SDL_Rect leg2 = {x + size/2, y + size - size/6, size/6, size/6};
+    SDL_RenderFillRect(renderer, &leg1);
+    SDL_RenderFillRect(renderer, &leg2);
 }
 
 // Simple digit drawing function (7-segment style)
@@ -1773,51 +1971,91 @@ void checkItemPickup() {
 }
 
 void handleInput() {
-    // Si está muerto o ganó, solo permitir reiniciar
+    // Si está muerto o ganó, permitir reiniciar, ver replay o volver al menú
     if(gameOver || gameWon) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
             if(event.type == SDL_QUIT) {
                 running = false;
             }
-            if(event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
-                // Reiniciar todas las variables del juego
-                playerHealth = 100;
-                ammo = 500;
-                kills = 0;
-                bulletsFired = 0;
-                gameOver = false;
-                gameWon = false;
-                posX = 20;
-                posY = 20;
-                dirX = -1;
-                dirY = 0;
-                currentWeapon = PISTOL;
-                cameraRoll = 0;
-                verticalPosition = 0;
-                verticalVelocity = 0;
-                isJumping = false;
-                
-                // Limpiar balas y beams
-                bullets.clear();
-                enemyBullets.clear();
-                laserBeams.clear();
-                
-                // Reiniciar enemigos
-                enemies.clear();
-                initEnemies();
-                
-                // Reiniciar items
-                items.clear();
-                initItems();
-                
-                // REPLAY: Clear recording for new session
-                clearRecording();
-                
-                printf("Juego reiniciado!\n");
+            if(event.type == SDL_KEYDOWN) {
+                // R: Reiniciar juego
+                if(event.key.keysym.sym == SDLK_r) {
+                    // Reiniciar todas las variables del juego
+                    playerHealth = 100;
+                    ammo = 50;
+                    kills = 0;
+                    bulletsFired = 0;
+                    gameOver = false;
+                    gameWon = false;
+                    posX = 2.0;
+                    posY = 2.0;
+                    dirX = -1.0;
+                    dirY = 0.0;
+                    planeX = 0.0;
+                    planeY = 0.66;
+                    currentWeapon = PISTOL;
+                    cameraRoll = 0;
+                    verticalPosition = 0;
+                    verticalVelocity = 0;
+                    isJumping = false;
+                    
+                    // Limpiar balas y beams
+                    bullets.clear();
+                    enemyBullets.clear();
+                    laserBeams.clear();
+                    
+                    // Reiniciar enemigos
+                    enemies.clear();
+                    initEnemies();
+                    
+                    // Reiniciar items
+                    items.clear();
+                    initItems();
+                    
+                    // REPLAY: Clear recording for new session
+                    clearRecording();
+                    
+                    printf("Juego reiniciado! Posición inicial: (%.1f, %.1f), Enemigos: %d\n", posX, posY, totalEnemies);
+                }
+                // U: Ver replay
+                else if(event.key.keysym.sym == SDLK_u) {
+                    printf(">>> Iniciando replay desde pantalla de Game Over/Victory...\n");
+                    startReplay();
+                }
+                // ESC: Volver al menú principal
+                else if(event.key.keysym.sym == SDLK_ESCAPE) {
+                    printf(">>> Volviendo al menú principal...\n");
+                    currentGameState = STATE_MAIN_MENU;
+                    gameOver = false;
+                    gameWon = false;
+                    
+                    // Resetear juego para la próxima partida
+                    playerHealth = 100;
+                    ammo = 50;
+                    kills = 0;
+                    bulletsFired = 0;
+                    posX = 2.0;
+                    posY = 2.0;
+                    dirX = -1.0;
+                    dirY = 0.0;
+                    planeX = 0.0;
+                    planeY = 0.66;
+                    currentWeapon = PISTOL;
+                    cameraRoll = 0;
+                    verticalPosition = 0;
+                    verticalVelocity = 0;
+                    isJumping = false;
+                    
+                    bullets.clear();
+                    enemyBullets.clear();
+                    laserBeams.clear();
+                    enemies.clear();
+                    items.clear();
+                }
             }
         }
-        return; // No procesar más input si está muerto
+        return; // No procesar más input si está muerto/ganó
     }
     
     // Reset input state each frame
@@ -1995,100 +2233,81 @@ void handleInput() {
 
 // Draw main menu
 void drawMainMenu() {
-    // Clear screen with dark blue background
-    SDL_SetRenderDrawColor(renderer, 20, 20, 60, 255);
-    SDL_RenderClear(renderer);
-    
-    // Title: "WOLFENSTEIN 3D"
-    SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
-    
-    // Draw title letters (simple blocky style)
-    int titleY = 100;
-    int titleX = SCREEN_WIDTH / 2 - 200;
-    
-    // W
-    SDL_Rect titleRect = {titleX, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 30, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 7, titleY + 40, 16, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // O
-    titleX += 60;
-    titleRect = {titleX, titleY, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY + 45, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 25, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // L
-    titleX += 60;
-    titleRect = {titleX, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY + 45, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // F
-    titleX += 60;
-    titleRect = {titleX, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY + 25, 30, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // 3D
-    titleX += 70;
-    SDL_SetRenderDrawColor(renderer, 255, 255, 50, 255);
-    titleRect = {titleX, titleY, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 25, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY + 22, 35, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX, titleY + 45, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    titleRect = {titleX + 50, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 50, titleY, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 75, titleY, 15, 60};
-    SDL_RenderFillRect(renderer, &titleRect);
-    titleRect = {titleX + 50, titleY + 45, 40, 15};
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // Menu buttons
-    int buttonWidth = 300;
-    int buttonHeight = 60;
-    int buttonX = SCREEN_WIDTH / 2 - buttonWidth / 2;
-    int buttonY = 280;
-    int buttonSpacing = 80;
-    
-    // Nueva Partida button
-    SDL_SetRenderDrawColor(renderer, 60, 120, 60, 255);
-    SDL_Rect newGameButton = {buttonX, buttonY, buttonWidth, buttonHeight};
-    SDL_RenderFillRect(renderer, &newGameButton);
-    SDL_SetRenderDrawColor(renderer, 120, 255, 120, 255);
-    SDL_Rect newGameBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
-    SDL_RenderDrawRect(renderer, &newGameBorder);
-    
-    // Draw "NEW GAME" text
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    int textX = buttonX + 30;
-    int textY = buttonY + 15;
-    // Simple text representation with rectangles
-    for(int i = 0; i < 200; i += 20) {
-        SDL_Rect charRect = {textX + i, textY, 12, 30};
-        SDL_RenderFillRect(renderer, &charRect);
+    // Animated gradient background
+    for(int y = 0; y < SCREEN_HEIGHT; y++) {
+        int r = 10 + (y * 20) / SCREEN_HEIGHT;
+        int g = 10 + (y * 30) / SCREEN_HEIGHT;
+        int b = 40 + (y * 40) / SCREEN_HEIGHT;
+        SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+        SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
     }
     
+    // Decorative top bar
+    SDL_SetRenderDrawColor(renderer, 255, 0, 0, 100);
+    SDL_Rect topBar = {0, 0, SCREEN_WIDTH, 8};
+    SDL_RenderFillRect(renderer, &topBar);
+    SDL_SetRenderDrawColor(renderer, 255, 100, 0, 100);
+    SDL_Rect topBar2 = {0, 8, SCREEN_WIDTH, 4};
+    SDL_RenderFillRect(renderer, &topBar2);
+    
+    // Title: "WOLFENSTEIN 3D" with 3D effect (MUCH bigger!)
+    // Shadow layers
+    drawText("WOLFENSTEIN 3D", SCREEN_WIDTH / 2 - 162, 53, 0, 0, 0, 3);
+    drawText("WOLFENSTEIN 3D", SCREEN_WIDTH / 2 - 159, 50, 50, 0, 0, 3);
+    drawText("WOLFENSTEIN 3D", SCREEN_WIDTH / 2 - 156, 47, 100, 0, 0, 3);
+    // Main title
+    drawText("WOLFENSTEIN 3D", SCREEN_WIDTH / 2 - 153, 44, 255, 50, 50, 3);
+    
+    // Subtitle
+    drawText("RAYCASTING ENGINE", SCREEN_WIDTH / 2 - 102, 72, 150, 150, 200, 2);
+    
+    // Decorative border around menu area
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 150, 60);
+    SDL_Rect menuFrame = {SCREEN_WIDTH/2 - 200, 240, 400, 300};
+    SDL_RenderFillRect(renderer, &menuFrame);
+    SDL_SetRenderDrawColor(renderer, 150, 150, 200, 150);
+    SDL_RenderDrawRect(renderer, &menuFrame);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // Menu buttons
+    int buttonWidth = 320;
+    int buttonHeight = 70;
+    int buttonX = SCREEN_WIDTH / 2 - buttonWidth / 2;
+    int buttonY = 270;
+    
+    // Nueva Partida button with gradient effect
+    // Button shadow
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 100);
+    SDL_Rect newGameShadow = {buttonX + 4, buttonY + 4, buttonWidth, buttonHeight};
+    SDL_RenderFillRect(renderer, &newGameShadow);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // Button gradient
+    for(int i = 0; i < buttonHeight; i++) {
+        int r = 50 + (i * 40) / buttonHeight;
+        int g = 150 - (i * 30) / buttonHeight;
+        SDL_SetRenderDrawColor(renderer, r, g, 50, 255);
+        SDL_RenderDrawLine(renderer, buttonX, buttonY + i, buttonX + buttonWidth, buttonY + i);
+    }
+    
+    // Button border
+    SDL_SetRenderDrawColor(renderer, 150, 255, 100, 255);
+    SDL_Rect newGameBorder = {buttonX - 3, buttonY - 3, buttonWidth + 6, buttonHeight + 6};
+    SDL_RenderDrawRect(renderer, &newGameBorder);
+    SDL_Rect newGameBorder2 = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+    SDL_RenderDrawRect(renderer, &newGameBorder2);
+    
+    // Draw "NEW GAME" text with shadow (MUCH bigger!)
+    drawText("NEW GAME", buttonX + 51, buttonY + 22, 0, 0, 0, 3);
+    drawText("NEW GAME", buttonX + 50, buttonY + 21, 255, 255, 255, 3);
+    
+    // Keyboard shortcut hint
+    drawText("(PRESS N)", buttonX + 100, buttonY + 46, 200, 255, 200, 2);
+    
     // Visualizar Partida button
-    buttonY += buttonSpacing;
+    buttonY += 80;
     
     if(showFileDropZone) {
         // Show file drop zone
@@ -2107,27 +2326,18 @@ void drawMainMenu() {
             SDL_RenderDrawPoint(renderer, buttonX + buttonWidth, buttonY + i);
         }
         
-        // Instructions text
-        SDL_SetRenderDrawColor(renderer, 200, 200, 255, 255);
-        textX = buttonX + 20;
-        textY = buttonY + 20;
-        for(int i = 0; i < 260; i += 8) {
-            SDL_Rect pixel = {textX + i, textY, 4, 20};
-            SDL_RenderFillRect(renderer, &pixel);
-        }
-        textY += 30;
-        for(int i = 0; i < 200; i += 8) {
-            SDL_Rect pixel = {textX + i, textY, 4, 20};
-            SDL_RenderFillRect(renderer, &pixel);
-        }
+        // Instructions text (BIGGER!)
+        drawText("DROP FILE HERE", buttonX + 45, buttonY + 25, 200, 200, 255, 2);
+        drawText("OR CLICK TO BROWSE", buttonX + 25, buttonY + 45, 200, 200, 255, 2);
         
         // File info if loaded
         if(jsonFileLoaded) {
-            textY += 40;
-            SDL_SetRenderDrawColor(renderer, jsonFileValid ? 100 : 255, jsonFileValid ? 255 : 100, 100, 255);
-            for(int i = 0; i < 250; i += 8) {
-                SDL_Rect pixel = {textX + i, textY, 4, 20};
-                SDL_RenderFillRect(renderer, &pixel);
+            if(jsonFileValid) {
+                char buffer[128];
+                sprintf(buffer, "LOADED %d FRAMES", (int)recordedFrames.size());
+                drawText(buffer, buttonX + 40, buttonY + 80, 100, 255, 100, 2);
+            } else {
+                drawText("INVALID FILE", buttonX + 60, buttonY + 80, 255, 100, 100, 2);
             }
         }
         
@@ -2141,41 +2351,59 @@ void drawMainMenu() {
             SDL_Rect playBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
             SDL_RenderDrawRect(renderer, &playBorder);
             
-            // "PLAY" text
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-            textX = buttonX + 100;
-            textY = buttonY + 15;
-            for(int i = 0; i < 100; i += 20) {
-                SDL_Rect charRect = {textX + i, textY, 12, 30};
-                SDL_RenderFillRect(renderer, &charRect);
-            }
+            // "PLAY" text (BIGGER!)
+            drawText("PLAY", buttonX + 115, buttonY + 22, 255, 255, 255, 3);
         }
     } else {
-        // Normal button
-        SDL_SetRenderDrawColor(renderer, 80, 80, 120, 255);
-        SDL_Rect viewReplayButton = {buttonX, buttonY, buttonWidth, buttonHeight};
-        SDL_RenderFillRect(renderer, &viewReplayButton);
-        SDL_SetRenderDrawColor(renderer, 150, 150, 255, 255);
-        SDL_Rect viewReplayBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
-        SDL_RenderDrawRect(renderer, &viewReplayBorder);
+        // VIEW REPLAY button with gradient effect
+        // Button shadow
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 100);
+        SDL_Rect replayShadow = {buttonX + 4, buttonY + 4, buttonWidth, buttonHeight};
+        SDL_RenderFillRect(renderer, &replayShadow);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         
-        // Draw "VIEW REPLAY" text
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        textX = buttonX + 30;
-        textY = buttonY + 15;
-        for(int i = 0; i < 220; i += 20) {
-            SDL_Rect charRect = {textX + i, textY, 12, 30};
-            SDL_RenderFillRect(renderer, &charRect);
+        // Button gradient (purple/blue theme)
+        for(int i = 0; i < buttonHeight; i++) {
+            int r = 60 + (i * 60) / buttonHeight;
+            int b = 150 - (i * 30) / buttonHeight;
+            SDL_SetRenderDrawColor(renderer, r, 80, b, 255);
+            SDL_RenderDrawLine(renderer, buttonX, buttonY + i, buttonX + buttonWidth, buttonY + i);
         }
+        
+        // Button border
+        SDL_SetRenderDrawColor(renderer, 150, 150, 255, 255);
+        SDL_Rect replayBorder = {buttonX - 3, buttonY - 3, buttonWidth + 6, buttonHeight + 6};
+        SDL_RenderDrawRect(renderer, &replayBorder);
+        SDL_Rect replayBorder2 = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+        SDL_RenderDrawRect(renderer, &replayBorder2);
+        
+        // Draw "VIEW REPLAY" text with shadow (MUCH bigger!)
+        drawText("VIEW REPLAY", buttonX + 15, buttonY + 22, 0, 0, 0, 3);
+        drawText("VIEW REPLAY", buttonX + 14, buttonY + 21, 255, 255, 255, 3);
+        
+        // Hint text
+        drawText("(LOAD CSV/JSON)", buttonX + 65, buttonY + 46, 200, 200, 255, 2);
     }
     
-    // Footer text
+    // Draw enemy sprites on the sides of the menu
+    // Left side - DOG (bigger sprite!)
+    drawDogSprite(70, 300, 100);
+    drawText("DOG", 95, 410, 200, 150, 100, 2);
+    
+    // Right side - SOLDIER (bigger sprite!)
+    drawSoldierSprite(SCREEN_WIDTH - 170, 300, 100);
+    drawText("SOLDIER", SCREEN_WIDTH - 197, 410, 150, 180, 200, 2);
+    
+    // Footer decorative line
     SDL_SetRenderDrawColor(renderer, 100, 100, 150, 255);
-    int footerY = SCREEN_HEIGHT - 50;
-    for(int i = 0; i < 400; i += 8) {
-        SDL_Rect pixel = {SCREEN_WIDTH / 2 - 200 + i, footerY, 4, 15};
-        SDL_RenderFillRect(renderer, &pixel);
-    }
+    SDL_RenderDrawLine(renderer, 50, SCREEN_HEIGHT - 65, SCREEN_WIDTH - 50, SCREEN_HEIGHT - 65);
+    
+    // Footer text with icons (MUCH bigger!)
+    drawText("PRESS 'U' DURING GAMEPLAY TO RECORD", SCREEN_WIDTH / 2 - 204, SCREEN_HEIGHT - 50, 150, 200, 255, 2);
+    
+    // Version/credit
+    drawText("RAYCASTING v1.0", 10, SCREEN_HEIGHT - 20, 80, 80, 120, 2);
 }
 
 // Handle main menu input
@@ -2187,14 +2415,53 @@ void handleMainMenuInput() {
             return;
         }
         
+        // Keyboard shortcuts
+        if(event.type == SDL_KEYDOWN) {
+            if(event.key.keysym.sym == SDLK_n) {
+                // Press 'N' for New Game
+                printf(">>> NEW GAME (keyboard shortcut)!\n");
+                currentGameState = STATE_PLAYING;
+                // Reset game completely
+                posX = 2.0; posY = 2.0;
+                dirX = -1.0; dirY = 0.0;
+                planeX = 0.0; planeY = 0.66;
+                playerHealth = 100;
+                ammo = 50;
+                kills = 0;
+                bulletsFired = 0;
+                gameOver = false;
+                gameWon = false;
+                currentWeapon = PISTOL;
+                cameraRoll = 0;
+                verticalPosition = 0;
+                verticalVelocity = 0;
+                isJumping = false;
+                
+                // Limpiar entidades
+                bullets.clear();
+                enemyBullets.clear();
+                laserBeams.clear();
+                enemies.clear();
+                items.clear();
+                
+                // Reinicializar enemigos e items
+                initEnemies();
+                initItems();
+                
+                clearRecording();
+                printf("Juego iniciado con %d enemigos\n", totalEnemies);
+                return;
+            }
+        }
+        
         if(event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
             int mouseX = event.button.x;
             int mouseY = event.button.y;
             
-            int buttonWidth = 300;
-            int buttonHeight = 60;
+            int buttonWidth = 320;
+            int buttonHeight = 70;
             int buttonX = SCREEN_WIDTH / 2 - buttonWidth / 2;
-            int buttonY = 280;
+            int buttonY = 270;
             int buttonSpacing = 80;
             
             // Check New Game button
@@ -2202,16 +2469,35 @@ void handleMainMenuInput() {
                mouseY >= buttonY && mouseY <= buttonY + buttonHeight) {
                 printf(">>> NEW GAME clicked!\n");
                 currentGameState = STATE_PLAYING;
-                // Reset game
+                // Reset game completely
                 posX = 2.0; posY = 2.0;
                 dirX = -1.0; dirY = 0.0;
                 planeX = 0.0; planeY = 0.66;
                 playerHealth = 100;
                 ammo = 50;
                 kills = 0;
+                bulletsFired = 0;
                 gameOver = false;
                 gameWon = false;
+                currentWeapon = PISTOL;
+                cameraRoll = 0;
+                verticalPosition = 0;
+                verticalVelocity = 0;
+                isJumping = false;
+                
+                // Limpiar entidades
+                bullets.clear();
+                enemyBullets.clear();
+                laserBeams.clear();
+                enemies.clear();
+                items.clear();
+                
+                // Reinicializar enemigos e items
+                initEnemies();
+                initItems();
+                
                 clearRecording();
+                printf("Juego iniciado con %d enemigos\n", totalEnemies);
                 return;
             }
             
@@ -2226,15 +2512,15 @@ void handleMainMenuInput() {
                     EM_ASM({
                         var input = document.createElement('input');
                         input.type = 'file';
-                        input.accept = '.json';
+                        input.accept = '.csv,.json';  // Accept both CSV (preferred) and JSON (legacy)
                         input.onchange = function(e) {
                             var file = e.target.files[0];
                             if(file) {
                                 Module.ccall('setJsonFilename', null, ['string'], [file.name]);
                                 var reader = new FileReader();
                                 reader.onload = function(event) {
-                                    var jsonStr = event.target.result;
-                                    Module.ccall('loadReplayFromJSON', null, ['string'], [jsonStr]);
+                                    var dataStr = event.target.result;
+                                    Module.ccall('loadReplayFromJSON', null, ['string'], [dataStr]);
                                 };
                                 reader.readAsText(file);
                             }
@@ -2437,12 +2723,12 @@ void drawReplayUI() {
     // Timeline bar at bottom
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-    SDL_Rect bottomOverlay = {0, SCREEN_HEIGHT - 80, SCREEN_WIDTH, 80};
+    SDL_Rect bottomOverlay = {0, SCREEN_HEIGHT - 90, SCREEN_WIDTH, 90};
     SDL_RenderFillRect(renderer, &bottomOverlay);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     
     // CONTROL BUTTONS
-    int buttonY = SCREEN_HEIGHT - 70;
+    int buttonY = SCREEN_HEIGHT - 75;
     int buttonSize = 30;
     int buttonSpacing = 40;
     int startX = 20;
@@ -2518,11 +2804,11 @@ void drawReplayUI() {
     SDL_RenderFillRect(renderer, &xBar1);
     SDL_RenderFillRect(renderer, &xBar2);
     
-    // Timeline background
-    int timelineX = 200;
-    int timelineY = SCREEN_HEIGHT - 60;
-    int timelineWidth = SCREEN_WIDTH - 220;
-    int timelineHeight = 15;
+    // Timeline background (below buttons)
+    int timelineX = 20;
+    int timelineY = SCREEN_HEIGHT - 35;
+    int timelineWidth = SCREEN_WIDTH - 40;
+    int timelineHeight = 20;
     
     SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
     SDL_Rect timelineBg = {timelineX, timelineY, timelineWidth, timelineHeight};
@@ -2546,20 +2832,33 @@ void drawReplayUI() {
     SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
     SDL_RenderDrawRect(renderer, &timelineBg);
     
-    // Controls help text (small)
-    SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
-    SDL_Rect help1 = {20, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help1); // Simulate "SPACE=pause"
-    SDL_Rect help2 = {100, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help2); // Simulate "←→=step"
-    SDL_Rect help3 = {180, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help3); // Simulate "Q/E=skip"
-    SDL_Rect help4 = {260, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help4); // Simulate "±=speed"
-    SDL_Rect help5 = {340, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help5); // Simulate "R=restart"
-    SDL_Rect help6 = {420, SCREEN_HEIGHT - 20, 8, 8};
-    SDL_RenderFillRect(renderer, &help6); // Simulate "ESC=exit"
+    // Re-draw HUD on top of overlay so it's visible
+    // Health bar
+    SDL_SetRenderDrawColor(renderer, 100, 0, 0, 200);
+    SDL_Rect healthBg = {SCREEN_WIDTH - 250, SCREEN_HEIGHT - 80, 230, 25};
+    SDL_RenderFillRect(renderer, &healthBg);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &healthBg);
+    
+    // Get current health from replay frame
+    int currentHealth = playerHealth;
+    int currentAmmo = ammo;
+    if(!recordedFrames.empty() && replayCurrentFrame < recordedFrames.size()) {
+        currentHealth = recordedFrames[replayCurrentFrame].playerHealth;
+        currentAmmo = recordedFrames[replayCurrentFrame].ammo;
+    }
+    
+    SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+    int healthWidth = (currentHealth * 230) / 100;
+    SDL_Rect health = {SCREEN_WIDTH - 250, SCREEN_HEIGHT - 80, healthWidth, 25};
+    SDL_RenderFillRect(renderer, &health);
+    
+    // Health number
+    drawNumber(currentHealth, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 77, 255, 255, 255);
+    
+    // Ammo indicator
+    drawText("AMMO:", SCREEN_WIDTH - 90, SCREEN_HEIGHT - 77, 200, 200, 0);
+    drawNumber(currentAmmo, SCREEN_WIDTH - 45, SCREEN_HEIGHT - 77, 255, 255, 0);
 }
 
 void render() {
@@ -3047,18 +3346,10 @@ void render() {
         drawNumber(kills, 200, 290, 255, 255, 0);
         drawNumber(bulletsFired, 200, 320, 255, 255, 0);
         
-        // Mensaje de reinicio
-        SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
-        SDL_Rect restartMsg = {180, 380, 280, 30};
-        SDL_RenderDrawRect(renderer, &restartMsg);
-        
-        // "PRESS R TO RESTART" (simple)
-        SDL_Rect r1 = {220, 390, 10, 10};
-        SDL_RenderFillRect(renderer, &r1);
-        SDL_Rect r2 = {235, 390, 10, 10};
-        SDL_RenderFillRect(renderer, &r2);
-        SDL_Rect r3 = {250, 390, 10, 10};
-        SDL_RenderFillRect(renderer, &r3);
+        // Controles disponibles
+        drawText("PRESS 'R' TO RESTART", 160, 370, 200, 200, 200);
+        drawText("PRESS 'U' TO VIEW REPLAY", 140, 395, 100, 200, 255);
+        drawText("PRESS 'ESC' TO MAIN MENU", 135, 420, 255, 200, 100);
     }
     
     // Victory Screen
@@ -3143,10 +3434,10 @@ void render() {
         drawNumber(bulletsFired, 200, 340, 255, 255, 50);
         drawNumber(playerHealth, 200, 370, 255, 50, 50);
         
-        // Mensaje de reinicio
-        SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
-        SDL_Rect restartMsg = {180, 410, 280, 30};
-        SDL_RenderDrawRect(renderer, &restartMsg);
+        // Controles disponibles
+        drawText("PRESS 'R' TO RESTART", 160, 410, 200, 200, 200);
+        drawText("PRESS 'U' TO VIEW REPLAY", 140, 435, 100, 200, 255);
+        drawText("PRESS 'ESC' TO MAIN MENU", 135, 460, 255, 200, 100);
     }
     
     // Draw replay UI overlay (if in replay mode)
