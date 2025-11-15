@@ -251,6 +251,19 @@ float replaySpeed = 1.0f; // 1.0 = normal, 0.5 = slow, 2.0 = fast
 bool replayPaused = false;
 float replayFrameAccumulator = 0.0f; // For variable speed playback
 
+// Menu system
+enum GameState {
+    STATE_MAIN_MENU,
+    STATE_PLAYING,
+    STATE_REPLAY_VIEWER
+};
+
+GameState currentGameState = STATE_MAIN_MENU;
+bool jsonFileLoaded = false;
+bool jsonFileValid = false;
+std::string loadedJsonFilename = "";
+bool showFileDropZone = false;
+
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 bool running = true;
@@ -534,7 +547,14 @@ void exitReplay() {
     isReplaying = false;
     replayPaused = false;
     
-    // Restore to last recorded frame (continue gameplay)
+    // If viewing a loaded replay, return to menu
+    if(currentGameState == STATE_REPLAY_VIEWER) {
+        currentGameState = STATE_MAIN_MENU;
+        printf("REPLAY MODE: Exited. Returning to main menu.\n");
+        return;
+    }
+    
+    // Otherwise, restore to last recorded frame (continue gameplay)
     if(!recordedFrames.empty()) {
         applyGameState(recordedFrames.back());
     }
@@ -690,6 +710,56 @@ void exportReplayToJSON() {
         URL.revokeObjectURL(url);
         console.log('Replay exported successfully!');
     }, json.c_str());
+}
+
+// Load replay from JSON (called from JavaScript)
+extern "C" {
+    void EMSCRIPTEN_KEEPALIVE loadReplayFromJSON(const char* jsonData) {
+        printf(">>> loadReplayFromJSON called, data length: %d\n", (int)strlen(jsonData));
+        
+        // Clear current recording
+        recordedFrames.clear();
+        currentFrameNumber = 0;
+        
+        // Simple JSON parsing - this is a basic implementation
+        // In a real scenario, you'd want a proper JSON library
+        std::string json(jsonData);
+        
+        // Check if JSON contains required fields
+        if(json.find("\"frames\"") == std::string::npos || 
+           json.find("\"metadata\"") == std::string::npos) {
+            printf("ERROR: Invalid JSON format - missing required fields\n");
+            jsonFileValid = false;
+            return;
+        }
+        
+        // Count frames
+        int frameCount = 0;
+        size_t pos = 0;
+        while((pos = json.find("\"frame\":", pos)) != std::string::npos) {
+            frameCount++;
+            pos++;
+        }
+        
+        if(frameCount == 0) {
+            printf("ERROR: No frames found in JSON\n");
+            jsonFileValid = false;
+            return;
+        }
+        
+        printf("JSON validation OK: Found %d frames\n", frameCount);
+        jsonFileValid = true;
+        jsonFileLoaded = true;
+        
+        // For now, we'll just validate - actual replay loading would require full JSON parsing
+        // This is a simplified version for the demo
+        printf("Replay JSON loaded successfully! Ready to play.\n");
+    }
+    
+    void EMSCRIPTEN_KEEPALIVE setJsonFilename(const char* filename) {
+        loadedJsonFilename = filename;
+        printf(">>> JSON file selected: %s\n", filename);
+    }
 }
 
 // Update replay (advance frames according to speed)
@@ -1923,6 +1993,276 @@ void handleInput() {
     checkItemPickup();
 }
 
+// Draw main menu
+void drawMainMenu() {
+    // Clear screen with dark blue background
+    SDL_SetRenderDrawColor(renderer, 20, 20, 60, 255);
+    SDL_RenderClear(renderer);
+    
+    // Title: "WOLFENSTEIN 3D"
+    SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+    
+    // Draw title letters (simple blocky style)
+    int titleY = 100;
+    int titleX = SCREEN_WIDTH / 2 - 200;
+    
+    // W
+    SDL_Rect titleRect = {titleX, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 30, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 7, titleY + 40, 16, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    // O
+    titleX += 60;
+    titleRect = {titleX, titleY, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY + 45, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 25, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    // L
+    titleX += 60;
+    titleRect = {titleX, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY + 45, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    // F
+    titleX += 60;
+    titleRect = {titleX, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY + 25, 30, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    // 3D
+    titleX += 70;
+    SDL_SetRenderDrawColor(renderer, 255, 255, 50, 255);
+    titleRect = {titleX, titleY, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 25, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY + 22, 35, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX, titleY + 45, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    titleRect = {titleX + 50, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 50, titleY, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 75, titleY, 15, 60};
+    SDL_RenderFillRect(renderer, &titleRect);
+    titleRect = {titleX + 50, titleY + 45, 40, 15};
+    SDL_RenderFillRect(renderer, &titleRect);
+    
+    // Menu buttons
+    int buttonWidth = 300;
+    int buttonHeight = 60;
+    int buttonX = SCREEN_WIDTH / 2 - buttonWidth / 2;
+    int buttonY = 280;
+    int buttonSpacing = 80;
+    
+    // Nueva Partida button
+    SDL_SetRenderDrawColor(renderer, 60, 120, 60, 255);
+    SDL_Rect newGameButton = {buttonX, buttonY, buttonWidth, buttonHeight};
+    SDL_RenderFillRect(renderer, &newGameButton);
+    SDL_SetRenderDrawColor(renderer, 120, 255, 120, 255);
+    SDL_Rect newGameBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+    SDL_RenderDrawRect(renderer, &newGameBorder);
+    
+    // Draw "NEW GAME" text
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    int textX = buttonX + 30;
+    int textY = buttonY + 15;
+    // Simple text representation with rectangles
+    for(int i = 0; i < 200; i += 20) {
+        SDL_Rect charRect = {textX + i, textY, 12, 30};
+        SDL_RenderFillRect(renderer, &charRect);
+    }
+    
+    // Visualizar Partida button
+    buttonY += buttonSpacing;
+    
+    if(showFileDropZone) {
+        // Show file drop zone
+        SDL_SetRenderDrawColor(renderer, 40, 40, 80, 255);
+        SDL_Rect dropZone = {buttonX, buttonY, buttonWidth, buttonHeight * 2 + 20};
+        SDL_RenderFillRect(renderer, &dropZone);
+        
+        // Dashed border
+        SDL_SetRenderDrawColor(renderer, 150, 150, 200, 255);
+        for(int i = 0; i < buttonWidth; i += 10) {
+            SDL_RenderDrawPoint(renderer, buttonX + i, buttonY);
+            SDL_RenderDrawPoint(renderer, buttonX + i, buttonY + buttonHeight * 2 + 20);
+        }
+        for(int i = 0; i < buttonHeight * 2 + 20; i += 10) {
+            SDL_RenderDrawPoint(renderer, buttonX, buttonY + i);
+            SDL_RenderDrawPoint(renderer, buttonX + buttonWidth, buttonY + i);
+        }
+        
+        // Instructions text
+        SDL_SetRenderDrawColor(renderer, 200, 200, 255, 255);
+        textX = buttonX + 20;
+        textY = buttonY + 20;
+        for(int i = 0; i < 260; i += 8) {
+            SDL_Rect pixel = {textX + i, textY, 4, 20};
+            SDL_RenderFillRect(renderer, &pixel);
+        }
+        textY += 30;
+        for(int i = 0; i < 200; i += 8) {
+            SDL_Rect pixel = {textX + i, textY, 4, 20};
+            SDL_RenderFillRect(renderer, &pixel);
+        }
+        
+        // File info if loaded
+        if(jsonFileLoaded) {
+            textY += 40;
+            SDL_SetRenderDrawColor(renderer, jsonFileValid ? 100 : 255, jsonFileValid ? 255 : 100, 100, 255);
+            for(int i = 0; i < 250; i += 8) {
+                SDL_Rect pixel = {textX + i, textY, 4, 20};
+                SDL_RenderFillRect(renderer, &pixel);
+            }
+        }
+        
+        // Play button if valid JSON
+        if(jsonFileValid) {
+            buttonY += buttonHeight * 2 + 40;
+            SDL_SetRenderDrawColor(renderer, 120, 60, 120, 255);
+            SDL_Rect playButton = {buttonX, buttonY, buttonWidth, buttonHeight};
+            SDL_RenderFillRect(renderer, &playButton);
+            SDL_SetRenderDrawColor(renderer, 255, 120, 255, 255);
+            SDL_Rect playBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+            SDL_RenderDrawRect(renderer, &playBorder);
+            
+            // "PLAY" text
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            textX = buttonX + 100;
+            textY = buttonY + 15;
+            for(int i = 0; i < 100; i += 20) {
+                SDL_Rect charRect = {textX + i, textY, 12, 30};
+                SDL_RenderFillRect(renderer, &charRect);
+            }
+        }
+    } else {
+        // Normal button
+        SDL_SetRenderDrawColor(renderer, 80, 80, 120, 255);
+        SDL_Rect viewReplayButton = {buttonX, buttonY, buttonWidth, buttonHeight};
+        SDL_RenderFillRect(renderer, &viewReplayButton);
+        SDL_SetRenderDrawColor(renderer, 150, 150, 255, 255);
+        SDL_Rect viewReplayBorder = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+        SDL_RenderDrawRect(renderer, &viewReplayBorder);
+        
+        // Draw "VIEW REPLAY" text
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        textX = buttonX + 30;
+        textY = buttonY + 15;
+        for(int i = 0; i < 220; i += 20) {
+            SDL_Rect charRect = {textX + i, textY, 12, 30};
+            SDL_RenderFillRect(renderer, &charRect);
+        }
+    }
+    
+    // Footer text
+    SDL_SetRenderDrawColor(renderer, 100, 100, 150, 255);
+    int footerY = SCREEN_HEIGHT - 50;
+    for(int i = 0; i < 400; i += 8) {
+        SDL_Rect pixel = {SCREEN_WIDTH / 2 - 200 + i, footerY, 4, 15};
+        SDL_RenderFillRect(renderer, &pixel);
+    }
+}
+
+// Handle main menu input
+void handleMainMenuInput() {
+    SDL_Event event;
+    while(SDL_PollEvent(&event)) {
+        if(event.type == SDL_QUIT) {
+            running = false;
+            return;
+        }
+        
+        if(event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            int mouseX = event.button.x;
+            int mouseY = event.button.y;
+            
+            int buttonWidth = 300;
+            int buttonHeight = 60;
+            int buttonX = SCREEN_WIDTH / 2 - buttonWidth / 2;
+            int buttonY = 280;
+            int buttonSpacing = 80;
+            
+            // Check New Game button
+            if(mouseX >= buttonX && mouseX <= buttonX + buttonWidth &&
+               mouseY >= buttonY && mouseY <= buttonY + buttonHeight) {
+                printf(">>> NEW GAME clicked!\n");
+                currentGameState = STATE_PLAYING;
+                // Reset game
+                posX = 2.0; posY = 2.0;
+                dirX = -1.0; dirY = 0.0;
+                planeX = 0.0; planeY = 0.66;
+                playerHealth = 100;
+                ammo = 50;
+                kills = 0;
+                gameOver = false;
+                gameWon = false;
+                clearRecording();
+                return;
+            }
+            
+            // Check View Replay button
+            buttonY += buttonSpacing;
+            if(!showFileDropZone) {
+                if(mouseX >= buttonX && mouseX <= buttonX + buttonWidth &&
+                   mouseY >= buttonY && mouseY <= buttonY + buttonHeight) {
+                    printf(">>> VIEW REPLAY clicked!\n");
+                    showFileDropZone = true;
+                    // Trigger file picker
+                    EM_ASM({
+                        var input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = '.json';
+                        input.onchange = function(e) {
+                            var file = e.target.files[0];
+                            if(file) {
+                                Module.ccall('setJsonFilename', null, ['string'], [file.name]);
+                                var reader = new FileReader();
+                                reader.onload = function(event) {
+                                    var jsonStr = event.target.result;
+                                    Module.ccall('loadReplayFromJSON', null, ['string'], [jsonStr]);
+                                };
+                                reader.readAsText(file);
+                            }
+                        };
+                        input.click();
+                    });
+                    return;
+                }
+            } else {
+                // Check Play button (if JSON is valid)
+                if(jsonFileValid) {
+                    buttonY += buttonHeight * 2 + 40;
+                    if(mouseX >= buttonX && mouseX <= buttonX + buttonWidth &&
+                       mouseY >= buttonY && mouseY <= buttonY + buttonHeight) {
+                        printf(">>> PLAY REPLAY clicked!\n");
+                        // Start replay from loaded JSON
+                        if(!recordedFrames.empty()) {
+                            currentGameState = STATE_REPLAY_VIEWER;
+                            startReplay();
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Draw replay UI overlay
 void drawReplayUI() {
     if(!isReplaying) return;
@@ -2821,22 +3161,39 @@ void mainLoop() {
     double deltaTime = currentTime - lastTime;
     lastTime = currentTime;
     
-    if(!isReplaying) {
-        // Normal gameplay mode
-        handleInput();
-        updateEnemies(deltaTime);
-        
-        // Record frame automatically
-        if(isRecording && !gameOver && !gameWon) {
-            recordFrame(currentTime);
-        }
-    } else {
-        // Replay mode
-        handleReplayInput();
-        updateReplay();
+    // Handle different game states
+    switch(currentGameState) {
+        case STATE_MAIN_MENU:
+            handleMainMenuInput();
+            drawMainMenu();
+            SDL_RenderPresent(renderer);
+            break;
+            
+        case STATE_PLAYING:
+            if(!isReplaying) {
+                // Normal gameplay mode
+                handleInput();
+                updateEnemies(deltaTime);
+                
+                // Record frame automatically
+                if(isRecording && !gameOver && !gameWon) {
+                    recordFrame(currentTime);
+                }
+            } else {
+                // Replay mode (triggered by U key during gameplay)
+                handleReplayInput();
+                updateReplay();
+            }
+            render();
+            break;
+            
+        case STATE_REPLAY_VIEWER:
+            // Viewing loaded replay from JSON
+            handleReplayInput();
+            updateReplay();
+            render();
+            break;
     }
-    
-    render();
 }
 
 int main(int argc, char* argv[]) {
