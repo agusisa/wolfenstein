@@ -69,9 +69,10 @@ struct Enemy {
     double shootTimer;
     double shootCooldown;
     double fallOffset; // Para animación de caída al morir
+    bool hasSeenPlayer; // Track if enemy has detected player (for alert sound)
     
     Enemy(double px, double py, EnemyType t = SOLDIER) : x(px), y(py), health(100), alive(true), 
-          moveTimer(0), animFrame(0), type(t), shootTimer(0), shootCooldown(4.0), fallOffset(0) {}
+          moveTimer(0), animFrame(0), type(t), shootTimer(0), shootCooldown(4.0), fallOffset(0), hasSeenPlayer(false) {}
 };
 
 // Player and game state
@@ -87,7 +88,7 @@ bool gameOver = false;
 bool gameWon = false;
 
 // Weapon system
-enum WeaponType { PISTOL = 0, MACHINEGUN = 1, LASER = 2, SHOTGUN = 3 };
+enum WeaponType { PISTOL = 0, MACHINEGUN = 1, LASER = 2, SHOTGUN = 3, BAZOOKA = 4 };
 int currentWeapon = PISTOL;
 int weaponState = 0; // 0 = idle, 1 = shooting
 int weaponFrame = 0;
@@ -114,8 +115,10 @@ struct LaserBeam {
     int lifetime;
     bool active;
     std::vector<std::pair<double, double>> trail;
+    float rotation;  // Rotación para animación espiral
+    int spawnTime;   // Tiempo de spawn para efectos
     
-    LaserBeam() : x(0), y(0), dirX(0), dirY(0), lifetime(30), active(false) {}
+    LaserBeam() : x(0), y(0), dirX(0), dirY(0), lifetime(30), active(false), rotation(0), spawnTime(0) {}
 };
 std::vector<LaserBeam> laserBeams;
 
@@ -126,13 +129,28 @@ struct Bullet {
     int lifetime;
     bool active;
     bool isEnemy; // true si es bala enemiga
+    bool isBazooka; // true si es proyectil de bazooka
+    double speed; // Velocidad de la bala (para bazooka más lenta)
     std::vector<std::pair<double, double>> trail; // Estela de posiciones
     
-    Bullet() : x(0), y(0), dirX(0), dirY(0), lifetime(0), active(false), isEnemy(false) {}
+    Bullet() : x(0), y(0), dirX(0), dirY(0), lifetime(0), active(false), isEnemy(false), 
+               isBazooka(false), speed(0.3) {}
+};
+
+// Explosion system
+struct Explosion {
+    double x, y;
+    int lifetime;
+    float radius;
+    bool active;
+    int frame; // Para animación
+    
+    Explosion() : x(0), y(0), lifetime(30), radius(2.0f), active(false), frame(0) {}
 };
 
 std::vector<Bullet> bullets;
 std::vector<Bullet> enemyBullets;
+std::vector<Explosion> explosions;
 
 // Enemies
 std::vector<Enemy> enemies;
@@ -173,10 +191,11 @@ struct EnemySnapshot {
     bool alive;
     int type; // SOLDIER or DOG
     double fallOffset;
+    bool hasSeenPlayer;
     
-    EnemySnapshot() : x(0), y(0), health(0), alive(false), type(0), fallOffset(0) {}
+    EnemySnapshot() : x(0), y(0), health(0), alive(false), type(0), fallOffset(0), hasSeenPlayer(false) {}
     EnemySnapshot(const Enemy& e) : x(e.x), y(e.y), health(e.health), alive(e.alive), 
-                                     type(e.type), fallOffset(e.fallOffset) {}
+                                     type(e.type), fallOffset(e.fallOffset), hasSeenPlayer(e.hasSeenPlayer) {}
 };
 
 struct BulletSnapshot {
@@ -256,7 +275,8 @@ float replayFrameAccumulator = 0.0f; // For variable speed playback
 enum GameState {
     STATE_MAIN_MENU,
     STATE_PLAYING,
-    STATE_REPLAY_VIEWER
+    STATE_REPLAY_VIEWER,
+    STATE_MAP_EDITOR
 };
 
 GameState currentGameState = STATE_MAIN_MENU;
@@ -264,6 +284,43 @@ bool jsonFileLoaded = false;
 bool jsonFileValid = false;
 std::string loadedJsonFilename = "";
 bool showFileDropZone = false;
+
+// ============================================================================
+// MAP EDITOR SYSTEM
+// ============================================================================
+
+enum EditorTool {
+    TOOL_PAINT,
+    TOOL_ERASE
+};
+
+enum EditorElement {
+    ELEM_WALL_1,
+    ELEM_WALL_2,
+    ELEM_WALL_3,
+    ELEM_WALL_4,
+    ELEM_LIGHT,
+    ELEM_ENEMY_DOG,
+    ELEM_ENEMY_SOLDIER,
+    ELEM_ITEM_AMMO,
+    ELEM_ITEM_HEALTH,
+    ELEM_SPAWN
+};
+
+// Editor state variables
+int editorMapWidth = 24;
+int editorMapHeight = 24;
+int editorWorldMap[40][40];  // Maximum 40x40
+float cameraRotation = 45.0f; // 0, 90, 180, 270 degrees
+bool gridEnabled = true;
+EditorTool currentTool = TOOL_PAINT;
+EditorElement selectedElement = ELEM_WALL_1;
+double spawnX = 2.0;
+double spawnY = 2.0;
+
+// Editor UI state
+int hoveredTileX = -1;
+int hoveredTileY = -1;
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
@@ -299,12 +356,18 @@ float flashlightIntensity = 1.0f;
 float globalLightMultiplier = 1.0f; // Slider control for all lights (0.0 to 2.0)
 bool sliderDragging = false;       // Track if user is dragging the light slider
 
+// Editor entities (temporary storage) - declared here after structs are defined
+std::vector<LightSource> editorLights;
+std::vector<Enemy> editorEnemies;
+std::vector<Item> editorItems;
+
 // Sound system
 Mix_Chunk* shootSound = nullptr;
 Mix_Chunk* enemyDeathSound = nullptr;
 Mix_Chunk* playerHitSound = nullptr;
 Mix_Chunk* pickupAmmoSound = nullptr;
 Mix_Chunk* pickupHealthSound = nullptr;
+Mix_Chunk* enemyAlertSound = nullptr;
 
 // Generar sonidos procedurales simples
 void generateSounds() {
@@ -354,6 +417,16 @@ void generateSounds() {
         pickupHealthBuffer[i] = (Sint16)(sin(2 * M_PI * freq * t) * 8000 * exp(-t * 6));
     }
     pickupHealthSound = Mix_QuickLoad_RAW((Uint8*)pickupHealthBuffer, pickupHealthSamples * 2);
+    
+    // Sonido de alerta de enemigo (beep rápido ascendente)
+    const int alertSamples = shootFreq / 12; // ~83ms
+    Sint16* alertBuffer = new Sint16[alertSamples];
+    for(int i = 0; i < alertSamples; i++) {
+        double t = (double)i / shootFreq;
+        double freq = 600 + (t * 800); // Frecuencia ascendente de 600 a 1400 Hz
+        alertBuffer[i] = (Sint16)(sin(2 * M_PI * freq * t) * 9000 * exp(-t * 12));
+    }
+    enemyAlertSound = Mix_QuickLoad_RAW((Uint8*)alertBuffer, alertSamples * 2);
 }
 
 // ============================================================================
@@ -787,6 +860,9 @@ void loadReplayFromCSV(const char* csvData) {
 
 // Exported functions for JavaScript
 extern "C" {
+    // Map editor - load map from JSON
+    void EMSCRIPTEN_KEEPALIVE loadMapFromJSON(const char* jsonData);
+    
     // Main load function - detects format automatically
     void EMSCRIPTEN_KEEPALIVE loadReplayFromJSON(const char* data) {
         if(data == nullptr || strlen(data) < 10) {
@@ -1092,18 +1168,117 @@ float calculateLightingAt(double x, double y, double z = 0) {
         }
     }
     
-    // Player flashlight
+    // Player flashlight - projected forward from player
     if(flashlightEnabled) {
-        double dx = x - posX;
-        double dy = y - posY;
+        // Project flashlight origin 1.5 units in front of player
+        double flashOriginX = posX + dirX * 1.5;
+        double flashOriginY = posY + dirY * 1.5;
+        
+        double dx = x - flashOriginX;
+        double dy = y - flashOriginY;
         double dist = sqrt(dx*dx + dy*dy);
         
-        // Check if point is in front of player (cone check)
+        // Check if point is in front of player (cone check with tighter angle)
         double dotProduct = (dx * dirX + dy * dirY) / (dist + 0.001);
-        if(dotProduct > 0.5 && dist < flashlightRadius) {
+        if(dotProduct > 0.7 && dist < flashlightRadius) {
             float attenuation = 1.0f - (dist / flashlightRadius);
-            float coneEffect = (dotProduct - 0.5f) * 2.0f; // 0.0 to 1.0
+            float coneEffect = (dotProduct - 0.7f) * 3.33f; // 0.0 to 1.0 (adjusted for new threshold)
             totalLight += flashlightIntensity * attenuation * coneEffect;
+        }
+    }
+    
+    // Bullet lighting - balas iluminan su trayectoria
+    for(const auto& bullet : bullets) {
+        if(!bullet.active) continue;
+        
+        double dx = x - bullet.x;
+        double dy = y - bullet.y;
+        double dist = sqrt(dx*dx + dy*dy);
+        
+        // Bazooka tiene mayor radio e intensidad
+        const float bulletRadius = bullet.isBazooka ? 5.0f : 4.0f;
+        const float bulletIntensity = bullet.isBazooka ? 0.9f : 0.7f;
+        
+        if(dist < bulletRadius) {
+            float attenuation = 1.0f - (dist / bulletRadius);
+            attenuation = attenuation * attenuation; // Quadratic falloff
+            
+            // Balas azules o violetas (bazooka) iluminan el entorno
+            totalLight += bulletIntensity * attenuation;
+        }
+    }
+    
+    // Explosion lighting - explosiones iluminan intensamente
+    for(const auto& explosion : explosions) {
+        if(!explosion.active) continue;
+        
+        double dx = x - explosion.x;
+        double dy = y - explosion.y;
+        double dist = sqrt(dx*dx + dy*dy);
+        
+        const float explosionRadius = 6.0f;  // Radio grande de iluminación
+        float explosionIntensity = 1.5f * (1.0f - (float)explosion.frame / 30.0f); // Decrece con el tiempo
+        
+        if(dist < explosionRadius) {
+            float attenuation = 1.0f - (dist / explosionRadius);
+            attenuation = attenuation * attenuation;
+            totalLight += explosionIntensity * attenuation;
+        }
+    }
+    
+    // Enemy bullet lighting (rojo para balas enemigas)
+    for(const auto& bullet : enemyBullets) {
+        if(!bullet.active) continue;
+        
+        double dx = x - bullet.x;
+        double dy = y - bullet.y;
+        double dist = sqrt(dx*dx + dy*dy);
+        
+        const float bulletRadius = 2.0f;
+        const float bulletIntensity = 0.3f;
+        
+        if(dist < bulletRadius) {
+            float attenuation = 1.0f - (dist / bulletRadius);
+            attenuation = attenuation * attenuation;
+            totalLight += bulletIntensity * attenuation;
+        }
+    }
+    
+    // Laser beam lighting - el láser ilumina su recorrido con LUZ ROJA
+    if(laserActive && currentWeapon == LASER) {
+        // Crear iluminación ROJA a lo largo del rayo láser
+        double laserEndX = posX + dirX * 20.0;  // Proyectar 20 unidades adelante
+        double laserEndY = posY + dirY * 20.0;
+        
+        // Calcular distancia del punto al segmento del láser
+        double laserDx = laserEndX - posX;
+        double laserDy = laserEndY - posY;
+        double laserLength = sqrt(laserDx*laserDx + laserDy*laserDy);
+        
+        // Normalizar dirección del láser
+        double laserNormX = laserDx / laserLength;
+        double laserNormY = laserDy / laserLength;
+        
+        // Proyección del punto en el láser
+        double dx = x - posX;
+        double dy = y - posY;
+        double projection = dx * laserNormX + dy * laserNormY;
+        
+        if(projection >= 0 && projection <= laserLength) {
+            // Punto más cercano en el láser
+            double closestX = posX + laserNormX * projection;
+            double closestY = posY + laserNormY * projection;
+            
+            double distToLaser = sqrt((x - closestX)*(x - closestX) + (y - closestY)*(y - closestY));
+            
+            const float laserLightRadius = 4.0f;  // Radio aumentado para más iluminación roja
+            const float laserLightIntensity = 0.8f;  // Intensidad aumentada
+            
+            if(distToLaser < laserLightRadius) {
+                float attenuation = 1.0f - (distToLaser / laserLightRadius);
+                attenuation = attenuation * attenuation;
+                totalLight += laserLightIntensity * attenuation;
+            }
         }
     }
     
@@ -1155,101 +1330,467 @@ void applyLighting(int& r, int& g, int& b, float lightLevel) {
 }
 
 void drawWeapon() {
-    // Draw weapon at bottom center of screen
-    int weaponWidth = 120;
-    int weaponHeight = 180;
+    // Draw weapon at bottom center of screen - ESTILO HALF-LIFE 3D
+    int weaponWidth = 160;  // Más ancho para mejor presencia
+    int weaponHeight = 220;
     int weaponX = SCREEN_WIDTH / 2 - weaponWidth / 2;
     int weaponY = SCREEN_HEIGHT - weaponHeight;
     
-    // Weapon recoil when shooting
+    // Weapon recoil when shooting (más dramático)
     if(weaponState == 1) {
-        weaponY -= 20;
+        weaponY -= 30;
+        weaponX += (weaponFrame % 2 == 0 ? -2 : 2);  // Shake horizontal
     }
     
-    // Draw weapon based on type - CADA ARMA DIFERENTE
+    // Draw weapon based on type - RENDERIZADO 3D MEJORADO
     if(currentWeapon == PISTOL) {
-        // Pistola - gris, compacta
+        // === PISTOLA 3D - Estilo Half-Life ===
+        
+        // Barrel (cañón) con perspectiva y sombreado
+        // Sombra del cañón (lado izquierdo)
+        SDL_SetRenderDrawColor(renderer, 35, 35, 35, 255);
+        SDL_Rect barrelShadow = {weaponX + 55, weaponY + 20, 8, 70};
+        SDL_RenderFillRect(renderer, &barrelShadow);
+        
+        // Cañón principal
         SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
-        SDL_Rect barrel = {weaponX + 50, weaponY, 20, 60};
+        SDL_Rect barrel = {weaponX + 63, weaponY + 20, 20, 70};
         SDL_RenderFillRect(renderer, &barrel);
         
-        SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
-        SDL_Rect grip = {weaponX + 45, weaponY + 60, 30, 80};
+        // Highlight del cañón (lado derecho)
+        SDL_SetRenderDrawColor(renderer, 90, 90, 90, 255);
+        SDL_Rect barrelHighlight = {weaponX + 78, weaponY + 22, 5, 66};
+        SDL_RenderFillRect(renderer, &barrelHighlight);
+        
+        // Boca del cañón (en perspectiva)
+        SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
+        SDL_Rect bore = {weaponX + 66, weaponY + 15, 14, 8};
+        SDL_RenderFillRect(renderer, &bore);
+        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+        SDL_Rect boreInner = {weaponX + 68, weaponY + 17, 10, 4};
+        SDL_RenderFillRect(renderer, &boreInner);
+        
+        // Slide (corredera) con detalles
+        SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
+        SDL_Rect slide = {weaponX + 58, weaponY + 35, 30, 35};
+        SDL_RenderFillRect(renderer, &slide);
+        
+        // Detalles de la corredera
+        SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+        for(int i = 0; i < 5; i++) {
+            SDL_Rect groove = {weaponX + 60, weaponY + 40 + i*6, 2, 4};
+            SDL_RenderFillRect(renderer, &groove);
+        }
+        
+        // Grip (empuñadura) con textura
+        SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
+        SDL_Rect grip = {weaponX + 60, weaponY + 75, 28, 100};
         SDL_RenderFillRect(renderer, &grip);
         
-        // Detalles plateados
-        SDL_SetRenderDrawColor(renderer, 150, 150, 150, 255);
-        SDL_Rect detail = {weaponX + 52, weaponY + 10, 16, 4};
-        SDL_RenderFillRect(renderer, &detail);
+        // Textura de grip (puntos de agarre)
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        for(int y = 0; y < 10; y++) {
+            for(int x = 0; x < 3; x++) {
+                SDL_Rect dot = {weaponX + 64 + x*8, weaponY + 80 + y*9, 3, 3};
+                SDL_RenderFillRect(renderer, &dot);
+            }
+        }
+        
+        // Highlight del grip
+        SDL_SetRenderDrawColor(renderer, 65, 65, 65, 255);
+        SDL_Rect gripHighlight = {weaponX + 82, weaponY + 77, 4, 96};
+        SDL_RenderFillRect(renderer, &gripHighlight);
+        
+        // Detalles metálicos plateados
+        SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
+        SDL_Rect detail1 = {weaponX + 65, weaponY + 45, 18, 3};
+        SDL_RenderFillRect(renderer, &detail1);
+        SDL_Rect detail2 = {weaponX + 67, weaponY + 55, 14, 2};
+        SDL_RenderFillRect(renderer, &detail2);
+        
+        // Tornillos
+        SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+        SDL_Rect screw1 = {weaponX + 65, weaponY + 90, 3, 3};
+        SDL_RenderFillRect(renderer, &screw1);
+        SDL_Rect screw2 = {weaponX + 80, weaponY + 90, 3, 3};
+        SDL_RenderFillRect(renderer, &screw2);
     } 
     else if(currentWeapon == MACHINEGUN) {
-        // Ametralladora - más larga, doble cañón
-        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
-        SDL_Rect barrel1 = {weaponX + 45, weaponY, 12, 80};
-        SDL_RenderFillRect(renderer, &barrel1);
-        SDL_Rect barrel2 = {weaponX + 63, weaponY, 12, 80};
-        SDL_RenderFillRect(renderer, &barrel2);
+        // === AMETRALLADORA 3D ===
+        
+        // Cuerpo principal con volumen
+        SDL_SetRenderDrawColor(renderer, 35, 35, 35, 255);
+        SDL_Rect bodyShadow = {weaponX + 50, weaponY + 60, 50, 80};
+        SDL_RenderFillRect(renderer, &bodyShadow);
+        
+        SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+        SDL_Rect body = {weaponX + 55, weaponY + 60, 50, 80};
+        SDL_RenderFillRect(renderer, &body);
         
         SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-        SDL_Rect grip = {weaponX + 45, weaponY + 80, 30, 60};
+        SDL_Rect bodyHighlight = {weaponX + 95, weaponY + 62, 8, 76};
+        SDL_RenderFillRect(renderer, &bodyHighlight);
+        
+        // Doble cañón con perspectiva
+        // Cañón izquierdo
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        SDL_Rect barrel1 = {weaponX + 60, weaponY + 10, 15, 90};
+        SDL_RenderFillRect(renderer, &barrel1);
+        SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+        SDL_Rect barrel1Highlight = {weaponX + 72, weaponY + 12, 3, 86};
+        SDL_RenderFillRect(renderer, &barrel1Highlight);
+        
+        // Cañón derecho
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        SDL_Rect barrel2 = {weaponX + 80, weaponY + 10, 15, 90};
+        SDL_RenderFillRect(renderer, &barrel2);
+        SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+        SDL_Rect barrel2Highlight = {weaponX + 92, weaponY + 12, 3, 86};
+        SDL_RenderFillRect(renderer, &barrel2Highlight);
+        
+        // Bocas de los cañones
+        SDL_SetRenderDrawColor(renderer, 15, 15, 15, 255);
+        SDL_Rect bore1 = {weaponX + 62, weaponY + 5, 11, 8};
+        SDL_RenderFillRect(renderer, &bore1);
+        SDL_Rect bore2 = {weaponX + 82, weaponY + 5, 11, 8};
+        SDL_RenderFillRect(renderer, &bore2);
+        
+        // Cargador grande con detalles
+        SDL_SetRenderDrawColor(renderer, 25, 25, 25, 255);
+        SDL_Rect mag = {weaponX + 65, weaponY + 110, 25, 60};
+        SDL_RenderFillRect(renderer, &mag);
+        
+        // Detalle del cargador (balas visibles)
+        SDL_SetRenderDrawColor(renderer, 200, 180, 50, 255);
+        for(int i = 0; i < 6; i++) {
+            SDL_Rect bullet = {weaponX + 68, weaponY + 115 + i*9, 4, 6};
+            SDL_RenderFillRect(renderer, &bullet);
+            SDL_Rect bullet2 = {weaponX + 82, weaponY + 115 + i*9, 4, 6};
+            SDL_RenderFillRect(renderer, &bullet2);
+        }
+        
+        // Grip con textura antideslizante
+        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+        SDL_Rect grip = {weaponX + 70, weaponY + 140, 20, 50};
         SDL_RenderFillRect(renderer, &grip);
         
-        // Cargador largo
-        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-        SDL_Rect mag = {weaponX + 52, weaponY + 100, 16, 40};
-        SDL_RenderFillRect(renderer, &mag);
+        // Textura del grip
+        for(int i = 0; i < 12; i++) {
+            SDL_SetRenderDrawColor(renderer, 25, 25, 25, 255);
+            SDL_Rect line = {weaponX + 71, weaponY + 142 + i*4, 18, 2};
+            SDL_RenderFillRect(renderer, &line);
+        }
     }
     else if(currentWeapon == LASER) {
-        // Laser - forma futurista, color azulado
-        SDL_SetRenderDrawColor(renderer, 30, 50, 100, 255);
-        SDL_Rect barrel = {weaponX + 48, weaponY, 24, 70};
+        // === ARMA LÁSER 3D FUTURISTA ===
+        
+        // Cuerpo principal futurista con gradiente
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        
+        // Sombra base
+        SDL_SetRenderDrawColor(renderer, 20, 30, 60, 255);
+        SDL_Rect bodyShadow = {weaponX + 50, weaponY + 50, 60, 100};
+        SDL_RenderFillRect(renderer, &bodyShadow);
+        
+        // Cuerpo principal (azul oscuro metálico)
+        SDL_SetRenderDrawColor(renderer, 40, 60, 110, 255);
+        SDL_Rect body = {weaponX + 55, weaponY + 50, 50, 100};
+        SDL_RenderFillRect(renderer, &body);
+        
+        // Highlights metálicos azules
+        SDL_SetRenderDrawColor(renderer, 70, 100, 150, 255);
+        SDL_Rect highlight1 = {weaponX + 95, weaponY + 52, 8, 96};
+        SDL_RenderFillRect(renderer, &highlight1);
+        SDL_Rect highlight2 = {weaponX + 57, weaponY + 52, 3, 96};
+        SDL_RenderFillRect(renderer, &highlight2);
+        
+        // Cámara de energía (cristal brillante)
+        SDL_SetRenderDrawColor(renderer, 0, 150, 255, 180);
+        SDL_Rect energyChamber = {weaponX + 63, weaponY + 70, 30, 50};
+        SDL_RenderFillRect(renderer, &energyChamber);
+        
+        // Energía interna pulsante (efecto de carga)
+        int pulseAlpha = 100 + (weaponFrame * 30) % 155;
+        SDL_SetRenderDrawColor(renderer, 50, 200, 255, pulseAlpha);
+        SDL_Rect energyCore = {weaponX + 68, weaponY + 80, 20, 30};
+        SDL_RenderFillRect(renderer, &energyCore);
+        
+        SDL_SetRenderDrawColor(renderer, 150, 230, 255, pulseAlpha + 50);
+        SDL_Rect energyCenter = {weaponX + 73, weaponY + 90, 10, 10};
+        SDL_RenderFillRect(renderer, &energyCenter);
+        
+        // Barril del láser (cañón de enfoque)
+        SDL_SetRenderDrawColor(renderer, 35, 50, 90, 255);
+        SDL_Rect barrel = {weaponX + 65, weaponY + 10, 26, 60};
         SDL_RenderFillRect(renderer, &barrel);
         
-        // Luces LED
-        SDL_SetRenderDrawColor(renderer, 0, 200, 255, 255);
+        // Anillos del enfocador
+        SDL_SetRenderDrawColor(renderer, 100, 150, 200, 255);
         for(int i = 0; i < 4; i++) {
-            SDL_Rect led = {weaponX + 54, weaponY + 15 + i*12, 4, 4};
-            SDL_RenderFillRect(renderer, &led);
-            SDL_Rect led2 = {weaponX + 62, weaponY + 15 + i*12, 4, 4};
+            SDL_Rect ring = {weaponX + 66, weaponY + 20 + i*12, 24, 4};
+            SDL_RenderFillRect(renderer, &ring);
+        }
+        
+        // LEDs de estado (parpadeantes)
+        for(int i = 0; i < 4; i++) {
+            int ledAlpha = ((weaponFrame + i*2) % 20 < 10) ? 255 : 100;
+            SDL_SetRenderDrawColor(renderer, 0, 255, 200, ledAlpha);
+            SDL_Rect led1 = {weaponX + 60, weaponY + 75 + i*10, 4, 4};
+            SDL_RenderFillRect(renderer, &led1);
+            SDL_Rect led2 = {weaponX + 92, weaponY + 75 + i*10, 4, 4};
             SDL_RenderFillRect(renderer, &led2);
         }
         
-        SDL_SetRenderDrawColor(renderer, 50, 80, 120, 255);
-        SDL_Rect grip = {weaponX + 45, weaponY + 70, 30, 70};
+        // Emisor láser (cristal rojo brillante)
+        if(laserActive) {
+            // Resplandor rojo cuando está activo
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 150);
+            SDL_Rect glowOuter = {weaponX + 68, weaponY - 5, 20, 20};
+            SDL_RenderFillRect(renderer, &glowOuter);
+        }
+        
+        SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+        SDL_Rect emitter = {weaponX + 73, weaponY, 10, 15};
+        SDL_RenderFillRect(renderer, &emitter);
+        
+        SDL_SetRenderDrawColor(renderer, 255, 150, 150, 255);
+        SDL_Rect emitterCore = {weaponX + 76, weaponY + 3, 4, 9};
+        SDL_RenderFillRect(renderer, &emitterCore);
+        
+        // Grip ergonómico
+        SDL_SetRenderDrawColor(renderer, 50, 70, 100, 255);
+        SDL_Rect grip = {weaponX + 65, weaponY + 130, 26, 70};
         SDL_RenderFillRect(renderer, &grip);
         
-        // Cristal del láser
-        SDL_SetRenderDrawColor(renderer, 255, 50, 50, 200);
-        SDL_Rect crystal = {weaponX + 55, weaponY - 5, 10, 10};
-        SDL_RenderFillRect(renderer, &crystal);
+        // Detalles del grip
+        SDL_SetRenderDrawColor(renderer, 30, 50, 80, 255);
+        for(int i = 0; i < 8; i++) {
+            SDL_Rect detail = {weaponX + 67, weaponY + 135 + i*8, 22, 3};
+            SDL_RenderFillRect(renderer, &detail);
+        }
+        
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     }
     else if(currentWeapon == SHOTGUN) {
-        // Escopeta - más ancha, color madera
-        SDL_SetRenderDrawColor(renderer, 70, 50, 30, 255);
-        SDL_Rect barrel = {weaponX + 40, weaponY, 40, 70};
-        SDL_RenderFillRect(renderer, &barrel);
+        // === ESCOPETA 3D CON MADERA ===
         
-        // Doble cañón
-        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-        SDL_Rect bore1 = {weaponX + 50, weaponY - 2, 8, 8};
+        // Cañones dobles con perspectiva
+        // Cañón izquierdo
+        SDL_SetRenderDrawColor(renderer, 25, 25, 25, 255);
+        SDL_Rect barrel1 = {weaponX + 55, weaponY + 10, 18, 80};
+        SDL_RenderFillRect(renderer, &barrel1);
+        SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
+        SDL_Rect barrel1Highlight = {weaponX + 70, weaponY + 12, 3, 76};
+        SDL_RenderFillRect(renderer, &barrel1Highlight);
+        
+        // Cañón derecho
+        SDL_SetRenderDrawColor(renderer, 25, 25, 25, 255);
+        SDL_Rect barrel2 = {weaponX + 77, weaponY + 10, 18, 80};
+        SDL_RenderFillRect(renderer, &barrel2);
+        SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
+        SDL_Rect barrel2Highlight = {weaponX + 92, weaponY + 12, 3, 76};
+        SDL_RenderFillRect(renderer, &barrel2Highlight);
+        
+        // Bocas de los cañones
+        SDL_SetRenderDrawColor(renderer, 15, 15, 15, 255);
+        SDL_Rect bore1 = {weaponX + 58, weaponY + 5, 12, 9};
         SDL_RenderFillRect(renderer, &bore1);
-        SDL_Rect bore2 = {weaponX + 62, weaponY - 2, 8, 8};
+        SDL_Rect bore2 = {weaponX + 80, weaponY + 5, 12, 9};
         SDL_RenderFillRect(renderer, &bore2);
         
-        SDL_SetRenderDrawColor(renderer, 90, 60, 30, 255);
-        SDL_Rect grip = {weaponX + 45, weaponY + 70, 30, 70};
+        // Mecanismo de disparo (metal)
+        SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+        SDL_Rect action = {weaponX + 60, weaponY + 70, 35, 25};
+        SDL_RenderFillRect(renderer, &action);
+        
+        SDL_SetRenderDrawColor(renderer, 90, 90, 90, 255);
+        SDL_Rect actionHighlight = {weaponX + 88, weaponY + 72, 5, 21};
+        SDL_RenderFillRect(renderer, &actionHighlight);
+        
+        // Culata de madera con vetas
+        SDL_SetRenderDrawColor(renderer, 70, 45, 25, 255);
+        SDL_Rect stock = {weaponX + 60, weaponY + 100, 35, 90};
+        SDL_RenderFillRect(renderer, &stock);
+        
+        // Vetas de madera (textura)
+        SDL_SetRenderDrawColor(renderer, 50, 30, 15, 255);
+        for(int i = 0; i < 15; i++) {
+            int offset = (i % 3) * 2;
+            SDL_Rect grain = {weaponX + 62 + offset, weaponY + 105 + i*6, 28 - offset, 2};
+            SDL_RenderFillRect(renderer, &grain);
+        }
+        
+        // Highlight de la madera (barniz)
+        SDL_SetRenderDrawColor(renderer, 100, 70, 40, 255);
+        SDL_Rect woodHighlight = {weaponX + 87, weaponY + 102, 6, 86};
+        SDL_RenderFillRect(renderer, &woodHighlight);
+        
+        // Gatillo
+        SDL_SetRenderDrawColor(renderer, 180, 150, 50, 255);
+        SDL_Rect trigger = {weaponX + 72, weaponY + 110, 8, 15};
+        SDL_RenderFillRect(renderer, &trigger);
+    }
+    else if(currentWeapon == BAZOOKA) {
+        // === BAZOOKA 3D - LANZACOHETES ESTILO HALF-LIFE ===
+        
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        
+        // Tubo lanzador principal (grande y grueso)
+        SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+        SDL_Rect tube = {weaponX + 45, weaponY + 20, 65, 60};
+        SDL_RenderFillRect(renderer, &tube);
+        
+        // Sombra del tubo
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        SDL_Rect tubeShadow = {weaponX + 45, weaponY + 22, 10, 56};
+        SDL_RenderFillRect(renderer, &tubeShadow);
+        
+        // Highlight del tubo
+        SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+        SDL_Rect tubeHighlight = {weaponX + 100, weaponY + 22, 8, 56};
+        SDL_RenderFillRect(renderer, &tubeHighlight);
+        
+        // Boca del lanzacohetes (círculo grande)
+        SDL_SetRenderDrawColor(renderer, 15, 15, 15, 255);
+        SDL_Rect bore = {weaponX + 52, weaponY + 10, 50, 15};
+        SDL_RenderFillRect(renderer, &bore);
+        
+        // Interior de la boca (más oscuro)
+        SDL_SetRenderDrawColor(renderer, 5, 5, 5, 255);
+        SDL_Rect boreInner = {weaponX + 56, weaponY + 13, 42, 9};
+        SDL_RenderFillRect(renderer, &boreInner);
+        
+        // Anillos metálicos del cañón (textura)
+        SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
+        for(int i = 0; i < 3; i++) {
+            SDL_Rect ring = {weaponX + 47, weaponY + 30 + i*18, 61, 5};
+            SDL_RenderFillRect(renderer, &ring);
+        }
+        
+        // Mecanismo de disparo lateral
+        SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+        SDL_Rect trigger = {weaponX + 70, weaponY + 90, 20, 35};
+        SDL_RenderFillRect(renderer, &trigger);
+        
+        // Gatillo
+        SDL_SetRenderDrawColor(renderer, 200, 50, 50, 255);
+        SDL_Rect triggerButton = {weaponX + 75, weaponY + 100, 10, 15};
+        SDL_RenderFillRect(renderer, &triggerButton);
+        
+        // Visor óptico en la parte superior
+        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+        SDL_Rect scope = {weaponX + 65, weaponY + 18, 25, 10};
+        SDL_RenderFillRect(renderer, &scope);
+        
+        // Lente del visor
+        SDL_SetRenderDrawColor(renderer, 0, 150, 200, 180);
+        SDL_Rect scopeLens = {weaponX + 70, weaponY + 20, 5, 6};
+        SDL_RenderFillRect(renderer, &scopeLens);
+        SDL_Rect scopeLens2 = {weaponX + 82, weaponY + 20, 5, 6};
+        SDL_RenderFillRect(renderer, &scopeLens2);
+        
+        // Empuñadura ergonómica
+        SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
+        SDL_Rect grip = {weaponX + 65, weaponY + 130, 30, 60};
         SDL_RenderFillRect(renderer, &grip);
+        
+        // Textura del grip
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        for(int i = 0; i < 8; i++) {
+            SDL_Rect gripLine = {weaponX + 67, weaponY + 135 + i*7, 26, 3};
+            SDL_RenderFillRect(renderer, &gripLine);
+        }
+        
+        // Detalles metálicos (tornillos y placas)
+        SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+        SDL_Rect screw1 = {weaponX + 52, weaponY + 35, 4, 4};
+        SDL_RenderFillRect(renderer, &screw1);
+        SDL_Rect screw2 = {weaponX + 100, weaponY + 35, 4, 4};
+        SDL_RenderFillRect(renderer, &screw2);
+        SDL_Rect screw3 = {weaponX + 52, weaponY + 70, 4, 4};
+        SDL_RenderFillRect(renderer, &screw3);
+        SDL_Rect screw4 = {weaponX + 100, weaponY + 70, 4, 4};
+        SDL_RenderFillRect(renderer, &screw4);
+        
+        // Placa de advertencia (naranja)
+        SDL_SetRenderDrawColor(renderer, 255, 150, 0, 255);
+        SDL_Rect warningPlate = {weaponX + 70, weaponY + 50, 20, 8};
+        SDL_RenderFillRect(renderer, &warningPlate);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_Rect warningLine = {weaponX + 72, weaponY + 52, 16, 4};
+        SDL_RenderFillRect(renderer, &warningLine);
+        
+        // Indicador LED (violeta cuando activo)
+        if(weaponFrame % 6 < 3) {
+            SDL_SetRenderDrawColor(renderer, 200, 50, 255, 255);
+            SDL_Rect led = {weaponX + 96, weaponY + 55, 5, 5};
+            SDL_RenderFillRect(renderer, &led);
+        }
+        
+        // Soporte lateral del tubo
+        SDL_SetRenderDrawColor(renderer, 55, 55, 55, 255);
+        SDL_Rect support1 = {weaponX + 55, weaponY + 80, 8, 30};
+        SDL_RenderFillRect(renderer, &support1);
+        SDL_Rect support2 = {weaponX + 92, weaponY + 80, 8, 30};
+        SDL_RenderFillRect(renderer, &support2);
+        
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     }
     
-    // Muzzle flash when shooting (not in replay mode)
-    if(weaponState == 1 && weaponFrame < 2 && !isReplaying) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
-        SDL_Rect flash = {weaponX + 45, weaponY - 15, 30, 20};
-        SDL_RenderFillRect(renderer, &flash);
+    // Muzzle flash MEJORADO when shooting (not in replay mode)
+    if(weaponState == 1 && weaponFrame < 3 && !isReplaying) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         
-        SDL_SetRenderDrawColor(renderer, 255, 200, 0, 200);
-        SDL_Rect flash2 = {weaponX + 35, weaponY - 25, 50, 30};
-        SDL_RenderFillRect(renderer, &flash2);
+        int flashX = weaponX + 60;
+        int flashY = weaponY - 20;
+        
+        // Color según el arma
+        if(currentWeapon == LASER) {
+            // Flash rojo para láser
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 100);
+            SDL_Rect flash3 = {flashX - 15, flashY - 15, 70, 50};
+            SDL_RenderFillRect(renderer, &flash3);
+            
+            SDL_SetRenderDrawColor(renderer, 255, 50, 50, 200);
+            SDL_Rect flash2 = {flashX - 5, flashY - 5, 50, 30};
+            SDL_RenderFillRect(renderer, &flash2);
+            
+            SDL_SetRenderDrawColor(renderer, 255, 150, 150, 255);
+            SDL_Rect flash1 = {flashX + 5, flashY + 5, 30, 15};
+            SDL_RenderFillRect(renderer, &flash1);
+        } else if(currentWeapon == BAZOOKA) {
+            // Flash violeta para bazooka (más grande)
+            SDL_SetRenderDrawColor(renderer, 150, 0, 200, 100);
+            SDL_Rect flash4 = {flashX - 25, flashY - 25, 90, 70};
+            SDL_RenderFillRect(renderer, &flash4);
+            
+            SDL_SetRenderDrawColor(renderer, 180, 50, 230, 150);
+            SDL_Rect flash3 = {flashX - 18, flashY - 18, 76, 56};
+            SDL_RenderFillRect(renderer, &flash3);
+            
+            SDL_SetRenderDrawColor(renderer, 200, 100, 255, 200);
+            SDL_Rect flash2 = {flashX - 10, flashY - 10, 60, 40};
+            SDL_RenderFillRect(renderer, &flash2);
+            
+            SDL_SetRenderDrawColor(renderer, 230, 180, 255, 255);
+            SDL_Rect flash1 = {flashX, flashY, 40, 25};
+            SDL_RenderFillRect(renderer, &flash1);
+        } else {
+            // Flash amarillo-azul para balas normales
+            SDL_SetRenderDrawColor(renderer, 100, 150, 255, 80);
+            SDL_Rect flash3 = {flashX - 15, flashY - 15, 70, 50};
+            SDL_RenderFillRect(renderer, &flash3);
+            
+            SDL_SetRenderDrawColor(renderer, 150, 200, 255, 180);
+            SDL_Rect flash2 = {flashX - 5, flashY - 5, 50, 30};
+            SDL_RenderFillRect(renderer, &flash2);
+            
+            SDL_SetRenderDrawColor(renderer, 200, 230, 255, 255);
+            SDL_Rect flash1 = {flashX + 5, flashY + 5, 30, 15};
+            SDL_RenderFillRect(renderer, &flash1);
+        }
+        
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     }
 }
 
@@ -1575,8 +2116,8 @@ void drawHUD() {
 void shoot() {
     if(ammo <= 0) return;
     
-    // Ametralladora puede disparar mientras mantienes presionado
-    if(currentWeapon != MACHINEGUN && currentWeapon != SHOTGUN && currentWeapon != LASER && weaponState != 0) return;
+    // Ametralladora, shotgun, láser y bazooka pueden disparar mientras mantienes presionado
+    if(currentWeapon != MACHINEGUN && currentWeapon != SHOTGUN && currentWeapon != LASER && currentWeapon != BAZOOKA && weaponState != 0) return;
     
     weaponState = 1;
     weaponFrame = 0;
@@ -1689,6 +2230,27 @@ void shoot() {
             }
         }
     }
+    else if(currentWeapon == BAZOOKA) {
+        // BAZOOKA - dispara proyectil explosivo lento
+        if(weaponTimer == 0) {
+            ammo -= 10; // Consume mucha munición
+            bulletsFired++;
+            if(shootSound) Mix_PlayChannel(-1, shootSound, 0);
+            
+            Bullet rocket;
+            rocket.x = posX;
+            rocket.y = posY;
+            rocket.dirX = dirX;
+            rocket.dirY = dirY;
+            rocket.lifetime = 120; // Dura más en el aire
+            rocket.active = true;
+            rocket.isBazooka = true;
+            rocket.speed = 0.15; // MÁS LENTA que balas normales (0.3)
+            bullets.push_back(rocket);
+            
+            printf("Bazooka fired! Rocket speed: %.2f\n", rocket.speed);
+        }
+    }
 }
 
 void updateEnemies(double deltaTime) {
@@ -1710,6 +2272,27 @@ void updateEnemies(double deltaTime) {
         double dx = posX - enemy.x;
         double dy = posY - enemy.y;
         double dist = sqrt(dx * dx + dy * dy);
+        
+        // Check if enemy can see player (first time detection for alert sound)
+        if(!enemy.hasSeenPlayer && dist < 15.0) {
+            // Check for line of sight (no walls between enemy and player)
+            bool hasLineOfSight = true;
+            int steps = (int)(dist * 2);
+            for(int i = 1; i < steps; i++) {
+                double checkX = enemy.x + (dx / dist) * (i * 0.5);
+                double checkY = enemy.y + (dy / dist) * (i * 0.5);
+                if(worldMap[(int)checkX][(int)checkY] != 0) {
+                    hasLineOfSight = false;
+                    break;
+                }
+            }
+            
+            if(hasLineOfSight) {
+                enemy.hasSeenPlayer = true;
+                if(enemyAlertSound) Mix_PlayChannel(-1, enemyAlertSound, 0);
+                printf("Enemy detected player! Alert sound played.\n");
+            }
+        }
         
         // AI diferente según el tipo
         if(enemy.type == DOG) {
@@ -1837,20 +2420,45 @@ void updateEnemies(double deltaTime) {
         if(!bullet.active) continue;
         
         // Agregar posición actual a la estela
-        if(bullet.trail.size() < 15) { // Mantener hasta 15 posiciones
+        int maxTrail = bullet.isBazooka ? 25 : 15; // Bazooka deja estela más larga
+        if(bullet.trail.size() < (size_t)maxTrail) {
             bullet.trail.push_back(std::make_pair(bullet.x, bullet.y));
         } else {
             bullet.trail.erase(bullet.trail.begin()); // Remover la más antigua
             bullet.trail.push_back(std::make_pair(bullet.x, bullet.y));
         }
         
-        // Move bullet (velocidad rápida)
-        double bulletSpeed = 0.5;
+        // Move bullet usando la velocidad configurada
+        double bulletSpeed = bullet.isBazooka ? bullet.speed : 0.5; // Bazooka es más lenta
         double newX = bullet.x + bullet.dirX * bulletSpeed;
         double newY = bullet.y + bullet.dirY * bulletSpeed;
         
         // Check wall collision
         if(worldMap[int(newX)][int(newY)] != 0) {
+            // Si es bazooka, crear explosión
+            if(bullet.isBazooka) {
+                Explosion explosion;
+                explosion.x = bullet.x;
+                explosion.y = bullet.y;
+                explosion.radius = 2.0f; // Radio de 2x2 cuadrados
+                explosion.lifetime = 30;
+                explosion.active = true;
+                explosion.frame = 0;
+                explosions.push_back(explosion);
+                
+                // Daño al jugador si está cerca
+                double distToPlayer = sqrt((posX - bullet.x)*(posX - bullet.x) + 
+                                          (posY - bullet.y)*(posY - bullet.y));
+                if(distToPlayer < 2.5) { // Radio de daño al jugador
+                    int damage = (int)(80.0 * (1.0 - distToPlayer / 2.5)); // Daño decrece con distancia
+                    playerHealth -= damage;
+                    if(playerHealth < 0) playerHealth = 0;
+                    if(playerHitSound) Mix_PlayChannel(-1, playerHitSound, 0);
+                    printf("Explosion damaged player! Damage: %d, Distance: %.2f\n", damage, distToPlayer);
+                }
+                
+                printf("Rocket hit wall! Explosion created at (%.1f, %.1f)\n", bullet.x, bullet.y);
+            }
             bullet.active = false;
             continue;
         }
@@ -1864,13 +2472,41 @@ void updateEnemies(double deltaTime) {
             double dy = enemy.y - newY;
             double dist = sqrt(dx * dx + dy * dy);
             
-            if(dist < 0.3) { // Radio de colisión
-                enemy.health -= 50;
-                if(enemy.health <= 0) {
-                    enemy.alive = false;
-                    kills++;
-                    if(enemyDeathSound) Mix_PlayChannel(-1, enemyDeathSound, 0);
-                    printf("Enemy killed! Total kills: %d\n", kills);
+            double collisionRadius = bullet.isBazooka ? 0.5 : 0.3; // Bazooka tiene colisión más grande
+            
+            if(dist < collisionRadius) {
+                if(bullet.isBazooka) {
+                    // Crear explosión al impactar enemigo
+                    Explosion explosion;
+                    explosion.x = newX;
+                    explosion.y = newY;
+                    explosion.radius = 2.0f;
+                    explosion.lifetime = 30;
+                    explosion.active = true;
+                    explosion.frame = 0;
+                    explosions.push_back(explosion);
+                    
+                    // Daño al jugador si está cerca del enemigo impactado
+                    double distToPlayer = sqrt((posX - newX)*(posX - newX) + 
+                                              (posY - newY)*(posY - newY));
+                    if(distToPlayer < 2.5) {
+                        int damage = (int)(80.0 * (1.0 - distToPlayer / 2.5));
+                        playerHealth -= damage;
+                        if(playerHealth < 0) playerHealth = 0;
+                        if(playerHitSound) Mix_PlayChannel(-1, playerHitSound, 0);
+                        printf("Explosion damaged player! Damage: %d, Distance: %.2f\n", damage, distToPlayer);
+                    }
+                    
+                    printf("Rocket hit enemy! Explosion created\n");
+                } else {
+                    // Bala normal
+                    enemy.health -= 50;
+                    if(enemy.health <= 0) {
+                        enemy.alive = false;
+                        kills++;
+                        if(enemyDeathSound) Mix_PlayChannel(-1, enemyDeathSound, 0);
+                        printf("Enemy killed! Total kills: %d\n", kills);
+                    }
                 }
                 bullet.active = false;
                 hitEnemy = true;
@@ -1888,14 +2524,54 @@ void updateEnemies(double deltaTime) {
         }
     }
     
+    // Update explosions and apply area damage
+    for(auto& explosion : explosions) {
+        if(!explosion.active) continue;
+        
+        explosion.frame++;
+        explosion.lifetime--;
+        
+        // Aplicar daño a enemigos en el área (solo en el primer frame)
+        if(explosion.frame == 1) {
+            for(auto& enemy : enemies) {
+                if(!enemy.alive) continue;
+                
+                double dx = enemy.x - explosion.x;
+                double dy = enemy.y - explosion.y;
+                double dist = sqrt(dx*dx + dy*dy);
+                
+                if(dist < explosion.radius) {
+                    // Daño decrece con la distancia
+                    int damage = (int)(150.0 * (1.0 - dist / explosion.radius));
+                    enemy.health -= damage;
+                    if(enemy.health <= 0) {
+                        enemy.alive = false;
+                        kills++;
+                        if(enemyDeathSound) Mix_PlayChannel(-1, enemyDeathSound, 0);
+                        printf("Enemy killed by explosion! Total kills: %d\n", kills);
+                    }
+                    printf("Explosion damaged enemy at distance %.2f, damage: %d\n", dist, damage);
+                }
+            }
+        }
+        
+        if(explosion.lifetime <= 0) {
+            explosion.active = false;
+        }
+    }
+    
     // Update laser beams
     for(auto& beam : laserBeams) {
         if(!beam.active) continue;
         
-        // Agregar estela al láser (más lenta y duradera)
-        if(beam.trail.size() < 30) {
+        // Agregar estela al láser (más lenta y duradera, MÁS LARGA)
+        if(beam.trail.size() < 50) {  // Aumentado de 30 a 50 para estela más larga
             beam.trail.push_back(std::make_pair(beam.x, beam.y));
         }
+        
+        // Actualizar rotación para animación espiral (gira rápidamente)
+        beam.rotation += 15.0f;  // Grados por frame (muy rápido)
+        if(beam.rotation >= 360.0f) beam.rotation -= 360.0f;
         
         beam.lifetime--;
         if(beam.lifetime <= 0) {
@@ -2223,6 +2899,634 @@ void checkItemPickup() {
     }
 }
 
+// Forward declarations for editor functions
+void exportMapToJSON();
+void loadMapFromJSON(const char* jsonData);
+void testMap();
+
+void handleMapEditorInput() {
+    SDL_Event event;
+    while(SDL_PollEvent(&event)) {
+        if(event.type == SDL_QUIT) {
+            running = false;
+            return;
+        }
+        
+        // Arrow keys: Rotate camera
+        if(event.type == SDL_KEYDOWN) {
+            if(event.key.keysym.sym == SDLK_LEFT) {
+                cameraRotation -= 90.0f;
+                if(cameraRotation < 0) cameraRotation = 270.0f;
+                printf("Camera rotation: %.0f\n", cameraRotation);
+            }
+            else if(event.key.keysym.sym == SDLK_RIGHT) {
+                cameraRotation += 90.0f;
+                if(cameraRotation >= 360.0f) cameraRotation = 0.0f;
+                printf("Camera rotation: %.0f\n", cameraRotation);
+            }
+            else if(event.key.keysym.sym == SDLK_UP) {
+                cameraRotation = 45.0f; // Reset to default
+                printf("Camera rotation: %.0f\n", cameraRotation);
+            }
+            else if(event.key.keysym.sym == SDLK_ESCAPE) {
+                currentGameState = STATE_MAIN_MENU;
+                return;
+            }
+        }
+        
+        // Mouse click
+        if(event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            int mouseX = event.button.x;
+            int mouseY = event.button.y;
+            
+            // Check UI buttons first
+            
+            // LEFT PANEL: Tools
+            int leftPanelX = 10;
+            int leftPanelY = 80;
+            int buttonWidth = 120;
+            int buttonHeight = 40;
+            int buttonSpacing = 50;
+            
+            // Paint/Erase button
+            if(mouseX >= leftPanelX && mouseX <= leftPanelX + buttonWidth &&
+               mouseY >= leftPanelY && mouseY <= leftPanelY + buttonHeight) {
+                currentTool = (currentTool == TOOL_PAINT) ? TOOL_ERASE : TOOL_PAINT;
+                printf("Tool: %s\n", currentTool == TOOL_PAINT ? "PAINT" : "ERASE");
+                continue;
+            }
+            
+            // Grid button
+            leftPanelY += buttonSpacing;
+            if(mouseX >= leftPanelX && mouseX <= leftPanelX + buttonWidth &&
+               mouseY >= leftPanelY && mouseY <= leftPanelY + buttonHeight) {
+                gridEnabled = !gridEnabled;
+                printf("Grid: %s\n", gridEnabled ? "ON" : "OFF");
+                continue;
+            }
+            
+            // Size buttons
+            leftPanelY += buttonSpacing;
+            int sizeValues[] = {16, 24, 32};
+            for(int i = 0; i < 3; i++) {
+                if(mouseX >= leftPanelX && mouseX <= leftPanelX + buttonWidth &&
+                   mouseY >= leftPanelY + i * 35 && mouseY <= leftPanelY + i * 35 + 30) {
+                    // Change map size
+                    editorMapWidth = sizeValues[i];
+                    editorMapHeight = sizeValues[i];
+                    
+                    // Clear map
+                    for(int y = 0; y < 40; y++) {
+                        for(int x = 0; x < 40; x++) {
+                            editorWorldMap[x][y] = 0;
+                        }
+                    }
+                    editorLights.clear();
+                    editorEnemies.clear();
+                    editorItems.clear();
+                    
+                    printf("Map resized to %dx%d\n", editorMapWidth, editorMapHeight);
+                    continue;
+                }
+            }
+            
+            // RIGHT PANEL: Elements
+            int rightPanelX = SCREEN_WIDTH - 140;
+            int rightPanelY = 80;
+            int elemButtonSize = 50;
+            
+            // Wall buttons (2x2 grid)
+            for(int i = 0; i < 4; i++) {
+                int row = i / 2;
+                int col = i % 2;
+                SDL_Rect wallButton = {rightPanelX + col * 60, rightPanelY + row * 55, elemButtonSize, elemButtonSize};
+                if(mouseX >= wallButton.x && mouseX <= wallButton.x + wallButton.w &&
+                   mouseY >= wallButton.y && mouseY <= wallButton.y + wallButton.h) {
+                    selectedElement = (EditorElement)(ELEM_WALL_1 + i);
+                    printf("Selected: Wall %d\n", i + 1);
+                    continue;
+                }
+            }
+            
+            // Light, Dog buttons
+            rightPanelY += 110;
+            SDL_Rect lightButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= lightButton.x && mouseX <= lightButton.x + lightButton.w &&
+               mouseY >= lightButton.y && mouseY <= lightButton.y + lightButton.h) {
+                selectedElement = ELEM_LIGHT;
+                printf("Selected: Light\n");
+                continue;
+            }
+            
+            SDL_Rect dogButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= dogButton.x && mouseX <= dogButton.x + dogButton.w &&
+               mouseY >= dogButton.y && mouseY <= dogButton.y + dogButton.h) {
+                selectedElement = ELEM_ENEMY_DOG;
+                printf("Selected: Dog\n");
+                continue;
+            }
+            
+            // Soldier, Ammo buttons
+            rightPanelY += 55;
+            SDL_Rect soldierButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= soldierButton.x && mouseX <= soldierButton.x + soldierButton.w &&
+               mouseY >= soldierButton.y && mouseY <= soldierButton.y + soldierButton.h) {
+                selectedElement = ELEM_ENEMY_SOLDIER;
+                printf("Selected: Soldier\n");
+                continue;
+            }
+            
+            SDL_Rect ammoButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= ammoButton.x && mouseX <= ammoButton.x + ammoButton.w &&
+               mouseY >= ammoButton.y && mouseY <= ammoButton.y + ammoButton.h) {
+                selectedElement = ELEM_ITEM_AMMO;
+                printf("Selected: Ammo\n");
+                continue;
+            }
+            
+            // Health, Spawn buttons
+            rightPanelY += 55;
+            SDL_Rect healthButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= healthButton.x && mouseX <= healthButton.x + healthButton.w &&
+               mouseY >= healthButton.y && mouseY <= healthButton.y + healthButton.h) {
+                selectedElement = ELEM_ITEM_HEALTH;
+                printf("Selected: Health\n");
+                continue;
+            }
+            
+            SDL_Rect spawnButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+            if(mouseX >= spawnButton.x && mouseX <= spawnButton.x + spawnButton.w &&
+               mouseY >= spawnButton.y && mouseY <= spawnButton.y + spawnButton.h) {
+                selectedElement = ELEM_SPAWN;
+                printf("Selected: Spawn\n");
+                continue;
+            }
+            
+            // BOTTOM PANEL: Actions
+            int bottomY = SCREEN_HEIGHT - 70;
+            int bottomButtonWidth = 140;
+            int bottomButtonHeight = 50;
+            int bottomSpacing = 160;
+            int startX = SCREEN_WIDTH / 2 - bottomSpacing * 2;
+            
+            for(int i = 0; i < 4; i++) {
+                SDL_Rect actionButton = {startX + i * bottomSpacing, bottomY, bottomButtonWidth, bottomButtonHeight};
+                if(mouseX >= actionButton.x && mouseX <= actionButton.x + actionButton.w &&
+                   mouseY >= actionButton.y && mouseY <= actionButton.y + actionButton.h) {
+                    if(i == 0) {
+                        // SAVE
+                        exportMapToJSON();
+                    } else if(i == 1) {
+                        // LOAD
+                        EM_ASM({
+                            var input = document.createElement('input');
+                            input.type = 'file';
+                            input.accept = '.json';
+                            input.onchange = function(e) {
+                                var file = e.target.files[0];
+                                if(file) {
+                                    var reader = new FileReader();
+                                    reader.onload = function(event) {
+                                        var jsonData = event.target.result;
+                                        var lengthBytes = lengthBytesUTF8(jsonData) + 1;
+                                        var jsonPtr = _malloc(lengthBytes);
+                                        stringToUTF8(jsonData, jsonPtr, lengthBytes);
+                                        _loadMapFromJSON(jsonPtr);
+                                        _free(jsonPtr);
+                                    };
+                                    reader.readAsText(file);
+                                }
+                            };
+                            input.click();
+                        });
+                    } else if(i == 2) {
+                        // TEST
+                        testMap();
+                        return;
+                    } else if(i == 3) {
+                        // BACK TO MENU
+                        currentGameState = STATE_MAIN_MENU;
+                        return;
+                    }
+                    continue;
+                }
+            }
+            
+            // If no UI button was clicked, try to place/erase on map
+            if(hoveredTileX >= 0 && hoveredTileY >= 0 && 
+               hoveredTileX < editorMapWidth && hoveredTileY < editorMapHeight) {
+                
+                if(currentTool == TOOL_PAINT) {
+                    // PAINT mode: place selected element
+                    if(selectedElement >= ELEM_WALL_1 && selectedElement <= ELEM_WALL_4) {
+                        // Place wall
+                        int wallType = selectedElement - ELEM_WALL_1 + 1;
+                        editorWorldMap[hoveredTileX][hoveredTileY] = wallType;
+                        printf("Placed wall %d at (%d, %d)\n", wallType, hoveredTileX, hoveredTileY);
+                    }
+                    else if(selectedElement == ELEM_LIGHT) {
+                        // Place light
+                        LightSource newLight;
+                        newLight.x = hoveredTileX + 0.5;
+                        newLight.y = hoveredTileY + 0.5;
+                        newLight.radius = 5.0f;
+                        newLight.r = 255;
+                        newLight.g = 200;
+                        newLight.b = 100;
+                        newLight.intensity = 0.7f;
+                        newLight.active = true;
+                        editorLights.push_back(newLight);
+                        printf("Placed light at (%d, %d)\n", hoveredTileX, hoveredTileY);
+                    }
+                    else if(selectedElement == ELEM_ENEMY_DOG || selectedElement == ELEM_ENEMY_SOLDIER) {
+                        // Place enemy
+                        EnemyType enemyType = (selectedElement == ELEM_ENEMY_DOG) ? DOG : SOLDIER;
+                        Enemy newEnemy(hoveredTileX + 0.5, hoveredTileY + 0.5, enemyType);
+                        editorEnemies.push_back(newEnemy);
+                        printf("Placed %s at (%d, %d)\n", 
+                               selectedElement == ELEM_ENEMY_DOG ? "dog" : "soldier",
+                               hoveredTileX, hoveredTileY);
+                    }
+                    else if(selectedElement == ELEM_ITEM_AMMO || selectedElement == ELEM_ITEM_HEALTH) {
+                        // Place item
+                        ItemType itemType = (selectedElement == ELEM_ITEM_AMMO) ? ITEM_AMMO : ITEM_HEALTH;
+                        Item newItem(hoveredTileX + 0.5, hoveredTileY + 0.5, itemType);
+                        editorItems.push_back(newItem);
+                        printf("Placed %s at (%d, %d)\n", 
+                               selectedElement == ELEM_ITEM_AMMO ? "ammo" : "health",
+                               hoveredTileX, hoveredTileY);
+                    }
+                    else if(selectedElement == ELEM_SPAWN) {
+                        // Set spawn point
+                        spawnX = hoveredTileX + 0.5;
+                        spawnY = hoveredTileY + 0.5;
+                        printf("Spawn point set to (%.1f, %.1f)\n", spawnX, spawnY);
+                    }
+                }
+                else {
+                    // ERASE mode: remove everything at this tile
+                    editorWorldMap[hoveredTileX][hoveredTileY] = 0;
+                    
+                    // Remove lights at this position
+                    editorLights.erase(
+                        std::remove_if(editorLights.begin(), editorLights.end(),
+                            [&](const LightSource& l) {
+                                return (int)l.x == hoveredTileX && (int)l.y == hoveredTileY;
+                            }),
+                        editorLights.end()
+                    );
+                    
+                    // Remove enemies at this position
+                    editorEnemies.erase(
+                        std::remove_if(editorEnemies.begin(), editorEnemies.end(),
+                            [&](const Enemy& e) {
+                                return (int)e.x == hoveredTileX && (int)e.y == hoveredTileY;
+                            }),
+                        editorEnemies.end()
+                    );
+                    
+                    // Remove items at this position
+                    editorItems.erase(
+                        std::remove_if(editorItems.begin(), editorItems.end(),
+                            [&](const Item& i) {
+                                return (int)i.x == hoveredTileX && (int)i.y == hoveredTileY;
+                            }),
+                        editorItems.end()
+                    );
+                    
+                    printf("Erased tile at (%d, %d)\n", hoveredTileX, hoveredTileY);
+                }
+            }
+        }
+    }
+}
+
+void exportMapToJSON() {
+    printf("Exporting map to JSON...\n");
+    
+    std::string json = "{\n";
+    char buffer[512];
+    
+    // Map dimensions
+    sprintf(buffer, "  \"width\": %d,\n", editorMapWidth);
+    json += buffer;
+    sprintf(buffer, "  \"height\": %d,\n", editorMapHeight);
+    json += buffer;
+    
+    // Walls (2D array)
+    json += "  \"walls\": [\n";
+    for(int y = 0; y < editorMapHeight; y++) {
+        json += "    [";
+        for(int x = 0; x < editorMapWidth; x++) {
+            sprintf(buffer, "%d", editorWorldMap[x][y]);
+            json += buffer;
+            if(x < editorMapWidth - 1) json += ",";
+        }
+        json += "]";
+        if(y < editorMapHeight - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ],\n";
+    
+    // Lights
+    json += "  \"lights\": [\n";
+    for(size_t i = 0; i < editorLights.size(); i++) {
+        const auto& light = editorLights[i];
+        sprintf(buffer, "    {\"x\": %.2f, \"y\": %.2f, \"radius\": %.2f, \"r\": %d, \"g\": %d, \"b\": %d, \"intensity\": %.2f}",
+                light.x, light.y, light.radius, light.r, light.g, light.b, light.intensity);
+        json += buffer;
+        if(i < editorLights.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ],\n";
+    
+    // Enemies
+    json += "  \"enemies\": [\n";
+    for(size_t i = 0; i < editorEnemies.size(); i++) {
+        const auto& enemy = editorEnemies[i];
+        sprintf(buffer, "    {\"x\": %.2f, \"y\": %.2f, \"type\": \"%s\"}",
+                enemy.x, enemy.y, enemy.type == DOG ? "DOG" : "SOLDIER");
+        json += buffer;
+        if(i < editorEnemies.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ],\n";
+    
+    // Items
+    json += "  \"items\": [\n";
+    for(size_t i = 0; i < editorItems.size(); i++) {
+        const auto& item = editorItems[i];
+        sprintf(buffer, "    {\"x\": %.2f, \"y\": %.2f, \"type\": \"%s\"}",
+                item.x, item.y, item.type == ITEM_AMMO ? "AMMO" : "HEALTH");
+        json += buffer;
+        if(i < editorItems.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ],\n";
+    
+    // Spawn point
+    sprintf(buffer, "  \"spawn\": {\"x\": %.2f, \"y\": %.2f}\n", spawnX, spawnY);
+    json += buffer;
+    
+    json += "}\n";
+    
+    printf("JSON export complete! Size: %d bytes\n", (int)json.length());
+    
+    // Download JSON file
+    EM_ASM({
+        var jsonStr = UTF8ToString($0);
+        var blob = new Blob([jsonStr], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'wolfenstein_map_' + Date.now() + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('Map JSON file download initiated');
+    }, json.c_str());
+}
+
+void loadMapFromJSON(const char* jsonData) {
+    printf("Loading map from JSON...\n");
+    
+    // Parse JSON manually (simple parser for our specific format)
+    std::string json(jsonData);
+    
+    // Clear current map
+    for(int y = 0; y < 40; y++) {
+        for(int x = 0; x < 40; x++) {
+            editorWorldMap[x][y] = 0;
+        }
+    }
+    editorLights.clear();
+    editorEnemies.clear();
+    editorItems.clear();
+    
+    // Parse width and height
+    size_t pos = json.find("\"width\":");
+    if(pos != std::string::npos) {
+        sscanf(json.c_str() + pos + 8, "%d", &editorMapWidth);
+    }
+    pos = json.find("\"height\":");
+    if(pos != std::string::npos) {
+        sscanf(json.c_str() + pos + 9, "%d", &editorMapHeight);
+    }
+    
+    printf("Map dimensions: %dx%d\n", editorMapWidth, editorMapHeight);
+    
+    // Parse walls array
+    pos = json.find("\"walls\":");
+    if(pos != std::string::npos) {
+        const char* wallData = json.c_str() + pos + 8;
+        // Find the opening bracket of the array
+        while(*wallData && *wallData != '[') wallData++;
+        wallData++; // Skip opening bracket
+        
+        for(int y = 0; y < editorMapHeight && *wallData; y++) {
+            // Find opening bracket for this row
+            while(*wallData && *wallData != '[') wallData++;
+            wallData++;
+            
+            for(int x = 0; x < editorMapWidth && *wallData; x++) {
+                while(*wallData && (*wallData == ' ' || *wallData == '\n')) wallData++;
+                editorWorldMap[x][y] = atoi(wallData);
+                // Skip to next number or end
+                while(*wallData && *wallData != ',' && *wallData != ']') wallData++;
+                if(*wallData == ',') wallData++;
+            }
+        }
+    }
+    
+    // Parse lights
+    pos = json.find("\"lights\":");
+    if(pos != std::string::npos) {
+        const char* lightData = json.c_str() + pos + 9;
+        while(*lightData && *lightData != '[') lightData++;
+        lightData++;
+        
+        while(*lightData) {
+            // Find next light object
+            while(*lightData && *lightData != '{') {
+                if(*lightData == ']') break;
+                lightData++;
+            }
+            if(*lightData != '{') break;
+            
+            LightSource light;
+            float x, y, radius, intensity;
+            int r, g, b;
+            if(sscanf(lightData, "{\"x\": %f, \"y\": %f, \"radius\": %f, \"r\": %d, \"g\": %d, \"b\": %d, \"intensity\": %f",
+                     &x, &y, &radius, &r, &g, &b, &intensity) == 7) {
+                light.x = x;
+                light.y = y;
+                light.radius = radius;
+                light.r = r;
+                light.g = g;
+                light.b = b;
+                light.intensity = intensity;
+                light.active = true;
+                editorLights.push_back(light);
+            }
+            
+            // Skip to end of this object
+            while(*lightData && *lightData != '}') lightData++;
+            if(*lightData == '}') lightData++;
+        }
+    }
+    
+    // Parse enemies
+    pos = json.find("\"enemies\":");
+    if(pos != std::string::npos) {
+        const char* enemyData = json.c_str() + pos + 10;
+        while(*enemyData && *enemyData != '[') enemyData++;
+        enemyData++;
+        
+        while(*enemyData) {
+            while(*enemyData && *enemyData != '{') {
+                if(*enemyData == ']') break;
+                enemyData++;
+            }
+            if(*enemyData != '{') break;
+            
+            float x, y;
+            char type[16];
+            if(sscanf(enemyData, "{\"x\": %f, \"y\": %f, \"type\": \"%[^\"]\"", &x, &y, type) == 3) {
+                EnemyType enemyType = (strcmp(type, "DOG") == 0) ? DOG : SOLDIER;
+                Enemy enemy(x, y, enemyType);
+                editorEnemies.push_back(enemy);
+            }
+            
+            while(*enemyData && *enemyData != '}') enemyData++;
+            if(*enemyData == '}') enemyData++;
+        }
+    }
+    
+    // Parse items
+    pos = json.find("\"items\":");
+    if(pos != std::string::npos) {
+        const char* itemData = json.c_str() + pos + 8;
+        while(*itemData && *itemData != '[') itemData++;
+        itemData++;
+        
+        while(*itemData) {
+            while(*itemData && *itemData != '{') {
+                if(*itemData == ']') break;
+                itemData++;
+            }
+            if(*itemData != '{') break;
+            
+            float x, y;
+            char type[16];
+            if(sscanf(itemData, "{\"x\": %f, \"y\": %f, \"type\": \"%[^\"]\"", &x, &y, type) == 3) {
+                ItemType itemType = (strcmp(type, "AMMO") == 0) ? ITEM_AMMO : ITEM_HEALTH;
+                Item item(x, y, itemType);
+                editorItems.push_back(item);
+            }
+            
+            while(*itemData && *itemData != '}') itemData++;
+            if(*itemData == '}') itemData++;
+        }
+    }
+    
+    // Parse spawn
+    pos = json.find("\"spawn\":");
+    if(pos != std::string::npos) {
+        float x, y;
+        if(sscanf(json.c_str() + pos + 8, "{\"x\": %f, \"y\": %f", &x, &y) == 2) {
+            spawnX = x;
+            spawnY = y;
+        }
+    }
+    
+    printf("Map loaded: %d walls, %d lights, %d enemies, %d items, spawn at (%.1f, %.1f)\n",
+           editorMapWidth * editorMapHeight, (int)editorLights.size(), (int)editorEnemies.size(),
+           (int)editorItems.size(), spawnX, spawnY);
+}
+
+void testMap() {
+    printf("Testing map...\n");
+    
+    // Copy editor map to game map
+    for(int y = 0; y < editorMapHeight; y++) {
+        for(int x = 0; x < editorMapWidth; x++) {
+            if(x < MAP_WIDTH && y < MAP_HEIGHT) {
+                worldMap[x][y] = editorWorldMap[x][y];
+            }
+        }
+    }
+    
+    // Clear remaining areas if editor map is smaller
+    for(int y = editorMapHeight; y < MAP_HEIGHT; y++) {
+        for(int x = 0; x < MAP_WIDTH; x++) {
+            worldMap[x][y] = 0;
+        }
+    }
+    for(int y = 0; y < MAP_HEIGHT; y++) {
+        for(int x = editorMapWidth; x < MAP_WIDTH; x++) {
+            worldMap[x][y] = 0;
+        }
+    }
+    
+    // Copy lights
+    lightSources.clear();
+    for(const auto& light : editorLights) {
+        lightSources.push_back(light);
+    }
+    
+    // Copy enemies
+    enemies.clear();
+    totalEnemies = 0;
+    for(const auto& editorEnemy : editorEnemies) {
+        enemies.push_back(editorEnemy);
+        totalEnemies++;
+    }
+    
+    // Copy items
+    items.clear();
+    for(const auto& editorItem : editorItems) {
+        items.push_back(editorItem);
+    }
+    
+    // Initialize item lights
+    for(auto& item : items) {
+        item.lightIndex = lightSources.size();
+        if(item.type == ITEM_HEALTH) {
+            lightSources.push_back({item.x, item.y, 3.0f, 255, 50, 50, 0.6f, true});
+        } else if(item.type == ITEM_AMMO) {
+            lightSources.push_back({item.x, item.y, 3.0f, 255, 200, 50, 0.6f, true});
+        }
+    }
+    
+    // Set player spawn position
+    posX = spawnX;
+    posY = spawnY;
+    
+    // Reset player state
+    playerHealth = 100;
+    ammo = 50;
+    kills = 0;
+    gameOver = false;
+    gameWon = false;
+    dirX = -1.0;
+    dirY = 0.0;
+    planeX = 0.0;
+    planeY = 0.66;
+    
+    // Reset replay state
+    isReplaying = false;
+    recordedFrames.clear();
+    replayCurrentFrame = 0;
+    replayPaused = false;
+    
+    printf("Map test: Player spawned at (%.1f, %.1f), %d enemies, %d items\n",
+           posX, posY, totalEnemies, (int)items.size());
+    
+    // Switch to gameplay
+    currentGameState = STATE_PLAYING;
+}
+
 void handleInput() {
     // Si está muerto o ganó, permitir reiniciar, ver replay o volver al menú
     if(gameOver || gameWon) {
@@ -2234,38 +3538,38 @@ void handleInput() {
             if(event.type == SDL_KEYDOWN) {
                 // R: Reiniciar juego
                 if(event.key.keysym.sym == SDLK_r) {
-                    // Reiniciar todas las variables del juego
-                    playerHealth = 100;
+                // Reiniciar todas las variables del juego
+                playerHealth = 100;
                     ammo = 50;
-                    kills = 0;
-                    bulletsFired = 0;
-                    gameOver = false;
-                    gameWon = false;
+                kills = 0;
+                bulletsFired = 0;
+                gameOver = false;
+                gameWon = false;
                     posX = 2.0;
                     posY = 2.0;
                     dirX = -1.0;
                     dirY = 0.0;
                     planeX = 0.0;
                     planeY = 0.66;
-                    currentWeapon = PISTOL;
-                    cameraRoll = 0;
-                    verticalPosition = 0;
-                    verticalVelocity = 0;
-                    isJumping = false;
-                    
-                    // Limpiar balas y beams
-                    bullets.clear();
-                    enemyBullets.clear();
-                    laserBeams.clear();
-                    
-                    // Reiniciar enemigos
-                    enemies.clear();
-                    initEnemies();
-                    
-                    // Reiniciar items
-                    items.clear();
-                    initItems();
-                    
+                currentWeapon = PISTOL;
+                cameraRoll = 0;
+                verticalPosition = 0;
+                verticalVelocity = 0;
+                isJumping = false;
+                
+                // Limpiar balas y beams
+                bullets.clear();
+                enemyBullets.clear();
+                laserBeams.clear();
+                
+                // Reiniciar enemigos
+                enemies.clear();
+                initEnemies();
+                
+                // Reiniciar items
+                items.clear();
+                initItems();
+                
                     // REPLAY: Clear recording for new session
                     clearRecording();
                     
@@ -2337,6 +3641,10 @@ void handleInput() {
                 currentWeapon = SHOTGUN;
                 printf("Arma: Escopeta\n");
             }
+            else if(event.key.keysym.sym == SDLK_5) {
+                currentWeapon = BAZOOKA;
+                printf("Arma: Bazooka\n");
+            }
             // Toggle flashlight with F
             else if(event.key.keysym.sym == SDLK_f) {
                 flashlightEnabled = !flashlightEnabled;
@@ -2346,6 +3654,12 @@ void handleInput() {
             else if(event.key.keysym.sym == SDLK_u) {
                 printf(">>> U key pressed! Recorded frames: %d\n", (int)recordedFrames.size());
                 startReplay();
+            }
+            // ESC: Return to main menu
+            else if(event.key.keysym.sym == SDLK_ESCAPE) {
+                printf(">>> Returning to main menu...\n");
+                currentGameState = STATE_MAIN_MENU;
+                return;
             }
             // Disparar con B (A y D son para strafe)
             else if(event.key.keysym.sym == SDLK_b) {
@@ -2393,7 +3707,7 @@ void handleInput() {
                     printf("Light intensity: %.2f\n", globalLightMultiplier);
                 } else {
                     // Not on slider - shoot
-                    shoot();
+                shoot();
                 }
             }
         }
@@ -2680,6 +3994,38 @@ void drawMainMenu() {
         drawText("(LOAD CSV/JSON)", buttonX + 65, buttonY + 46, 200, 200, 255, 2);
     }
     
+    // MAP EDITOR button
+    buttonY += 80;
+    
+    // Button shadow
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 100);
+    SDL_Rect editorShadow = {buttonX + 4, buttonY + 4, buttonWidth, buttonHeight};
+    SDL_RenderFillRect(renderer, &editorShadow);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // Button gradient (orange theme)
+    for(int i = 0; i < buttonHeight; i++) {
+        int r = 150 + (i * 30) / buttonHeight;
+        int g = 80 - (i * 20) / buttonHeight;
+        SDL_SetRenderDrawColor(renderer, r, g, 30, 255);
+        SDL_RenderDrawLine(renderer, buttonX, buttonY + i, buttonX + buttonWidth, buttonY + i);
+    }
+    
+    // Button border
+    SDL_SetRenderDrawColor(renderer, 255, 150, 50, 255);
+    SDL_Rect editorBorder = {buttonX - 3, buttonY - 3, buttonWidth + 6, buttonHeight + 6};
+    SDL_RenderDrawRect(renderer, &editorBorder);
+    SDL_Rect editorBorder2 = {buttonX - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4};
+    SDL_RenderDrawRect(renderer, &editorBorder2);
+    
+    // Draw "MAP EDITOR" text with shadow
+    drawText("MAP EDITOR", buttonX + 25, buttonY + 22, 0, 0, 0, 3);
+    drawText("MAP EDITOR", buttonX + 24, buttonY + 21, 255, 255, 255, 3);
+    
+    // Hint text
+    drawText("(CREATE LEVELS)", buttonX + 75, buttonY + 46, 255, 200, 100, 2);
+    
     // Draw enemy sprites on the sides of the menu
     // Left side - DOG (bigger sprite!)
     drawDogSprite(70, 300, 100);
@@ -2838,6 +4184,36 @@ void handleMainMenuInput() {
                         return;
                     }
                 }
+            }
+            
+            // Check MAP EDITOR button (third button)
+            buttonY += buttonSpacing;
+            if(mouseX >= buttonX && mouseX <= buttonX + buttonWidth &&
+               mouseY >= buttonY && mouseY <= buttonY + buttonHeight) {
+                printf(">>> MAP EDITOR clicked!\n");
+                
+                // Copy current game map to editor
+                for(int y = 0; y < MAP_HEIGHT; y++) {
+                    for(int x = 0; x < MAP_WIDTH; x++) {
+                        editorWorldMap[x][y] = worldMap[x][y];
+                    }
+                }
+                
+                // Copy entities to editor
+                editorLights.clear();
+                for(const auto& light : lightSources) {
+                    if(light.active) editorLights.push_back(light);
+                }
+                editorEnemies = enemies;
+                editorItems = items;
+                
+                // Set editor dimensions to current map size
+                editorMapWidth = 24;  // Default, can be changed in editor
+                editorMapHeight = 24;
+                
+                // Switch to editor
+                currentGameState = STATE_MAP_EDITOR;
+                return;
             }
         }
     }
@@ -3155,6 +4531,491 @@ void drawReplayUI() {
     drawNumber(currentAmmo, SCREEN_WIDTH - 45, SCREEN_HEIGHT - 77, 255, 255, 0);
 }
 
+// ============================================================================
+// MAP EDITOR RENDERING (ISOMETRIC VIEW)
+// ============================================================================
+
+void renderIsometricMap() {
+    // Clear screen with dark gray
+    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+    SDL_RenderClear(renderer);
+    
+    const int tileWidth = 32;
+    const int tileHeight = 16;
+    const int wallHeight = 24;
+    const int centerX = SCREEN_WIDTH / 2;
+    const int centerY = SCREEN_HEIGHT / 2 - 100;
+    
+    // Update hovered tile based on mouse position
+    int mouseX, mouseY;
+    SDL_GetMouseState(&mouseX, &mouseY);
+    hoveredTileX = -1;
+    hoveredTileY = -1;
+    
+    // Helper lambda to convert map coords to isometric screen coords with rotation
+    auto mapToIso = [&](int mapX, int mapY) -> std::pair<int, int> {
+        // Apply rotation to map coordinates
+        int rotX = mapX;
+        int rotY = mapY;
+        
+        if(cameraRotation == 90.0f) {
+            rotX = mapY;
+            rotY = editorMapWidth - 1 - mapX;
+        } else if(cameraRotation == 180.0f) {
+            rotX = editorMapWidth - 1 - mapX;
+            rotY = editorMapHeight - 1 - mapY;
+        } else if(cameraRotation == 270.0f) {
+            rotX = editorMapHeight - 1 - mapY;
+            rotY = mapX;
+        }
+        
+        // Isometric projection
+        int isoX = centerX + (rotX - rotY) * tileWidth / 2;
+        int isoY = centerY + (rotX + rotY) * tileHeight / 2;
+        
+        return {isoX, isoY};
+    };
+    
+    // Render in back-to-front order for proper depth
+    for(int y = 0; y < editorMapHeight; y++) {
+        for(int x = 0; x < editorMapWidth; x++) {
+            std::pair<int, int> iso = mapToIso(x, y);
+            int isoX = iso.first;
+            int isoY = iso.second;
+            
+            int wallType = editorWorldMap[x][y];
+            
+            // 1. Draw floor tile (light gray diamond)
+            SDL_Point floorPoints[5] = {
+                {isoX, isoY},
+                {isoX + tileWidth/2, isoY + tileHeight/2},
+                {isoX, isoY + tileHeight},
+                {isoX - tileWidth/2, isoY + tileHeight/2},
+                {isoX, isoY}
+            };
+            SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+            for(int i = 0; i < 4; i++) {
+                SDL_RenderDrawLine(renderer, floorPoints[i].x, floorPoints[i].y, 
+                                 floorPoints[i+1].x, floorPoints[i+1].y);
+            }
+            
+            // Fill floor
+            for(int dy = 0; dy < tileHeight; dy++) {
+                int width = (dy < tileHeight/2) ? dy * 2 : (tileHeight - dy) * 2;
+                SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
+                SDL_RenderDrawLine(renderer, isoX - width/2, isoY + dy, isoX + width/2, isoY + dy);
+            }
+            
+            // 2. Draw grid if enabled
+            if(gridEnabled) {
+                SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+                for(int i = 0; i < 4; i++) {
+                    SDL_RenderDrawLine(renderer, floorPoints[i].x, floorPoints[i].y, 
+                                     floorPoints[i+1].x, floorPoints[i+1].y);
+                }
+            }
+            
+            // 3. Draw walls with 3D height
+            if(wallType > 0) {
+                int r, g, b;
+                if(wallType == 1) { r = 180; g = 60; b = 60; }       // Red brick
+                else if(wallType == 2) { r = 120; g = 120; b = 120; } // Gray stone
+                else if(wallType == 3) { r = 60; g = 100; b = 180; }  // Blue metal
+                else { r = 100; g = 140; b = 80; }                    // Green mortar
+                
+                // Top face (diamond)
+                SDL_Point topPoints[5] = {
+                    {isoX, isoY - wallHeight},
+                    {isoX + tileWidth/2, isoY + tileHeight/2 - wallHeight},
+                    {isoX, isoY + tileHeight - wallHeight},
+                    {isoX - tileWidth/2, isoY + tileHeight/2 - wallHeight},
+                    {isoX, isoY - wallHeight}
+                };
+                SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+                for(int dy = 0; dy < tileHeight; dy++) {
+                    int width = (dy < tileHeight/2) ? dy * 2 : (tileHeight - dy) * 2;
+                    SDL_RenderDrawLine(renderer, isoX - width/2, isoY + dy - wallHeight, 
+                                     isoX + width/2, isoY + dy - wallHeight);
+                }
+                
+                // Left face
+                SDL_SetRenderDrawColor(renderer, r * 0.7, g * 0.7, b * 0.7, 255);
+                SDL_Point leftFace[4] = {
+                    {isoX - tileWidth/2, isoY + tileHeight/2},
+                    {isoX, isoY + tileHeight},
+                    {isoX, isoY + tileHeight - wallHeight},
+                    {isoX - tileWidth/2, isoY + tileHeight/2 - wallHeight}
+                };
+                for(int i = 0; i < 4; i++) {
+                    SDL_RenderDrawLine(renderer, leftFace[i].x, leftFace[i].y, 
+                                     leftFace[(i+1)%4].x, leftFace[(i+1)%4].y);
+                }
+                for(int dy = 0; dy < wallHeight; dy++) {
+                    SDL_RenderDrawLine(renderer, isoX - tileWidth/2, isoY + tileHeight/2 - dy,
+                                     isoX, isoY + tileHeight - dy);
+                }
+                
+                // Right face
+                SDL_SetRenderDrawColor(renderer, r * 0.5, g * 0.5, b * 0.5, 255);
+                SDL_Point rightFace[4] = {
+                    {isoX, isoY + tileHeight},
+                    {isoX + tileWidth/2, isoY + tileHeight/2},
+                    {isoX + tileWidth/2, isoY + tileHeight/2 - wallHeight},
+                    {isoX, isoY + tileHeight - wallHeight}
+                };
+                for(int dy = 0; dy < wallHeight; dy++) {
+                    SDL_RenderDrawLine(renderer, isoX, isoY + tileHeight - dy,
+                                     isoX + tileWidth/2, isoY + tileHeight/2 - dy);
+                }
+            }
+            
+            // Check if mouse is hovering this tile (simple bounds check)
+            if(mouseX >= isoX - tileWidth/2 && mouseX <= isoX + tileWidth/2 &&
+               mouseY >= isoY - wallHeight && mouseY <= isoY + tileHeight) {
+                hoveredTileX = x;
+                hoveredTileY = y;
+            }
+        }
+    }
+    
+    // 4. Draw lights
+    for(const auto& light : editorLights) {
+        int lx = (int)light.x;
+        int ly = (int)light.y;
+        if(lx >= 0 && lx < editorMapWidth && ly >= 0 && ly < editorMapHeight) {
+            std::pair<int, int> iso = mapToIso(lx, ly);
+            int isoX = iso.first;
+            int isoY = iso.second;
+            
+            // Yellow circle
+            SDL_SetRenderDrawColor(renderer, 255, 255, 100, 255);
+            for(int r = 0; r < 8; r++) {
+                for(int a = 0; a < 360; a += 10) {
+                    int px = isoX + r * cos(a * 3.14159 / 180.0);
+                    int py = isoY + r * sin(a * 3.14159 / 180.0) - 10;
+                    SDL_RenderDrawPoint(renderer, px, py);
+                }
+            }
+        }
+    }
+    
+    // 5. Draw enemies
+    for(const auto& enemy : editorEnemies) {
+        int ex = (int)enemy.x;
+        int ey = (int)enemy.y;
+        if(ex >= 0 && ex < editorMapWidth && ey >= 0 && ey < editorMapHeight) {
+            std::pair<int, int> iso = mapToIso(ex, ey);
+            int isoX = iso.first;
+            int isoY = iso.second;
+            
+            if(enemy.type == DOG) {
+                // Brown dog
+                SDL_SetRenderDrawColor(renderer, 120, 80, 40, 255);
+            } else {
+                // Gray soldier
+                SDL_SetRenderDrawColor(renderer, 150, 150, 150, 255);
+            }
+            
+            SDL_Rect enemyRect = {isoX - 6, isoY - 16, 12, 16};
+            SDL_RenderFillRect(renderer, &enemyRect);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &enemyRect);
+        }
+    }
+    
+    // 6. Draw items
+    for(const auto& item : editorItems) {
+        int ix = (int)item.x;
+        int iy = (int)item.y;
+        if(ix >= 0 && ix < editorMapWidth && iy >= 0 && iy < editorMapHeight) {
+            std::pair<int, int> iso = mapToIso(ix, iy);
+            int isoX = iso.first;
+            int isoY = iso.second;
+            
+            if(item.type == ITEM_AMMO) {
+                // Yellow ammo box
+                SDL_SetRenderDrawColor(renderer, 200, 200, 0, 255);
+                SDL_Rect ammoRect = {isoX - 5, isoY - 8, 10, 8};
+                SDL_RenderFillRect(renderer, &ammoRect);
+                SDL_SetRenderDrawColor(renderer, 100, 100, 0, 255);
+                SDL_RenderDrawRect(renderer, &ammoRect);
+            } else {
+                // Red health pack with white cross
+                SDL_SetRenderDrawColor(renderer, 200, 0, 0, 255);
+                SDL_Rect healthRect = {isoX - 5, isoY - 8, 10, 8};
+                SDL_RenderFillRect(renderer, &healthRect);
+                
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                SDL_RenderDrawLine(renderer, isoX - 3, isoY - 4, isoX + 3, isoY - 4);
+                SDL_RenderDrawLine(renderer, isoX, isoY - 7, isoX, isoY - 1);
+            }
+        }
+    }
+    
+    // 7. Draw spawn point
+    {
+        int sx = (int)spawnX;
+        int sy = (int)spawnY;
+        if(sx >= 0 && sx < editorMapWidth && sy >= 0 && sy < editorMapHeight) {
+            std::pair<int, int> iso = mapToIso(sx, sy);
+            int isoX = iso.first;
+            int isoY = iso.second;
+            
+            // Green circle
+            SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+            for(int r = 0; r < 10; r++) {
+                for(int a = 0; a < 360; a += 10) {
+                    int px = isoX + r * cos(a * 3.14159 / 180.0);
+                    int py = isoY + r * sin(a * 3.14159 / 180.0) - 15;
+                    SDL_RenderDrawPoint(renderer, px, py);
+                }
+            }
+            
+            // Draw "S"
+            drawText("S", isoX - 4, isoY - 20, 255, 255, 255, 1);
+        }
+    }
+    
+    // 8. Highlight hovered tile
+    if(hoveredTileX >= 0 && hoveredTileY >= 0) {
+        std::pair<int, int> iso = mapToIso(hoveredTileX, hoveredTileY);
+        int isoX = iso.first;
+        int isoY = iso.second;
+        
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_Point highlightPoints[5] = {
+            {isoX, isoY},
+            {isoX + tileWidth/2, isoY + tileHeight/2},
+            {isoX, isoY + tileHeight},
+            {isoX - tileWidth/2, isoY + tileHeight/2},
+            {isoX, isoY}
+        };
+        for(int i = 0; i < 4; i++) {
+            SDL_RenderDrawLine(renderer, highlightPoints[i].x, highlightPoints[i].y, 
+                             highlightPoints[i+1].x, highlightPoints[i+1].y);
+        }
+    }
+}
+
+void drawMapEditorUI() {
+    // Title
+    drawText("MAP EDITOR", SCREEN_WIDTH / 2 - 100, 10, 255, 255, 100, 3);
+    
+    // ===== LEFT PANEL: TOOLS =====
+    int leftPanelX = 10;
+    int leftPanelY = 80;
+    int buttonWidth = 120;
+    int buttonHeight = 40;
+    int buttonSpacing = 50;
+    
+    // Panel background
+    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 200);
+    SDL_Rect leftPanel = {leftPanelX - 5, leftPanelY - 5, buttonWidth + 10, buttonHeight * 3 + buttonSpacing * 2 + 10};
+    SDL_RenderFillRect(renderer, &leftPanel);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(renderer, &leftPanel);
+    
+    // PAINT / ERASE button
+    SDL_Rect paintButton = {leftPanelX, leftPanelY, buttonWidth, buttonHeight};
+    if(currentTool == TOOL_PAINT) {
+        SDL_SetRenderDrawColor(renderer, 0, 150, 0, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+    }
+    SDL_RenderFillRect(renderer, &paintButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &paintButton);
+    drawText(currentTool == TOOL_PAINT ? "PAINT" : "ERASE", leftPanelX + 20, leftPanelY + 13, 255, 255, 255, 2);
+    
+    // GRID toggle button
+    leftPanelY += buttonSpacing;
+    SDL_Rect gridButton = {leftPanelX, leftPanelY, buttonWidth, buttonHeight};
+    if(gridEnabled) {
+        SDL_SetRenderDrawColor(renderer, 0, 100, 150, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+    }
+    SDL_RenderFillRect(renderer, &gridButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &gridButton);
+    drawText(gridEnabled ? "GRID:ON" : "GRID:OFF", leftPanelX + 15, leftPanelY + 13, 255, 255, 255, 2);
+    
+    // Size selector buttons
+    leftPanelY += buttonSpacing;
+    const char* sizes[] = {"16x16", "24x24", "32x32"};
+    int sizeValues[] = {16, 24, 32};
+    for(int i = 0; i < 3; i++) {
+        SDL_Rect sizeButton = {leftPanelX, leftPanelY + i * 35, buttonWidth, 30};
+        if(editorMapWidth == sizeValues[i]) {
+            SDL_SetRenderDrawColor(renderer, 150, 100, 0, 255);
+        } else {
+            SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+        }
+        SDL_RenderFillRect(renderer, &sizeButton);
+        SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+        SDL_RenderDrawRect(renderer, &sizeButton);
+        drawText(sizes[i], leftPanelX + 30, leftPanelY + i * 35 + 8, 255, 255, 255, 2);
+    }
+    
+    // ===== RIGHT PANEL: ELEMENTS =====
+    int rightPanelX = SCREEN_WIDTH - 140;
+    int rightPanelY = 80;
+    int elemButtonSize = 50;
+    int elemSpacing = 55;
+    
+    // Panel background
+    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 200);
+    SDL_Rect rightPanel = {rightPanelX - 5, rightPanelY - 5, 130, elemSpacing * 3 + 10};
+    SDL_RenderFillRect(renderer, &rightPanel);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(renderer, &rightPanel);
+    
+    // Wall buttons (2x2 grid)
+    const char* wallNames[] = {"W1", "W2", "W3", "W4"};
+    int wallColors[][3] = {{180, 60, 60}, {120, 120, 120}, {60, 100, 180}, {100, 140, 80}};
+    for(int i = 0; i < 4; i++) {
+        int row = i / 2;
+        int col = i % 2;
+        SDL_Rect wallButton = {rightPanelX + col * 60, rightPanelY + row * 55, elemButtonSize, elemButtonSize};
+        
+        if(selectedElement == (EditorElement)(ELEM_WALL_1 + i)) {
+            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+            SDL_Rect highlight = {wallButton.x - 2, wallButton.y - 2, wallButton.w + 4, wallButton.h + 4};
+            SDL_RenderFillRect(renderer, &highlight);
+        }
+        
+        SDL_SetRenderDrawColor(renderer, wallColors[i][0], wallColors[i][1], wallColors[i][2], 255);
+        SDL_RenderFillRect(renderer, &wallButton);
+        SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+        SDL_RenderDrawRect(renderer, &wallButton);
+        drawText(wallNames[i], wallButton.x + 12, wallButton.y + 18, 255, 255, 255, 2);
+    }
+    
+    // Light button
+    rightPanelY += 110;
+    SDL_Rect lightButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_LIGHT) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {lightButton.x - 2, lightButton.y - 2, lightButton.w + 4, lightButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 255, 255, 100, 255);
+    SDL_RenderFillRect(renderer, &lightButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &lightButton);
+    drawText("LIGHT", lightButton.x + 5, lightButton.y + 18, 0, 0, 0, 2);
+    
+    // Dog button
+    SDL_Rect dogButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_ENEMY_DOG) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {dogButton.x - 2, dogButton.y - 2, dogButton.w + 4, dogButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 120, 80, 40, 255);
+    SDL_RenderFillRect(renderer, &dogButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &dogButton);
+    drawText("DOG", dogButton.x + 10, dogButton.y + 18, 255, 255, 255, 2);
+    
+    // Soldier button
+    rightPanelY += elemSpacing;
+    SDL_Rect soldierButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_ENEMY_SOLDIER) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {soldierButton.x - 2, soldierButton.y - 2, soldierButton.w + 4, soldierButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 150, 150, 150, 255);
+    SDL_RenderFillRect(renderer, &soldierButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &soldierButton);
+    drawText("SOLD", soldierButton.x + 8, soldierButton.y + 18, 0, 0, 0, 2);
+    
+    // Ammo button
+    SDL_Rect ammoButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_ITEM_AMMO) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {ammoButton.x - 2, ammoButton.y - 2, ammoButton.w + 4, ammoButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 200, 200, 0, 255);
+    SDL_RenderFillRect(renderer, &ammoButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &ammoButton);
+    drawText("AMMO", ammoButton.x + 6, ammoButton.y + 18, 0, 0, 0, 2);
+    
+    // Health button
+    rightPanelY += elemSpacing;
+    SDL_Rect healthButton = {rightPanelX, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_ITEM_HEALTH) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {healthButton.x - 2, healthButton.y - 2, healthButton.w + 4, healthButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 200, 0, 0, 255);
+    SDL_RenderFillRect(renderer, &healthButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &healthButton);
+    // Draw cross
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(renderer, healthButton.x + 15, healthButton.y + 25, healthButton.x + 35, healthButton.y + 25);
+    SDL_RenderDrawLine(renderer, healthButton.x + 25, healthButton.y + 15, healthButton.x + 25, healthButton.y + 35);
+    
+    // Spawn button
+    SDL_Rect spawnButton = {rightPanelX + 60, rightPanelY, elemButtonSize, elemButtonSize};
+    if(selectedElement == ELEM_SPAWN) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+        SDL_Rect highlight = {spawnButton.x - 2, spawnButton.y - 2, spawnButton.w + 4, spawnButton.h + 4};
+        SDL_RenderFillRect(renderer, &highlight);
+    }
+    SDL_SetRenderDrawColor(renderer, 0, 200, 0, 255);
+    SDL_RenderFillRect(renderer, &spawnButton);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &spawnButton);
+    drawText("SPAWN", spawnButton.x + 5, spawnButton.y + 18, 255, 255, 255, 2);
+    
+    // ===== BOTTOM PANEL: ACTIONS =====
+    int bottomY = SCREEN_HEIGHT - 70;
+    int bottomButtonWidth = 140;
+    int bottomButtonHeight = 50;
+    int bottomSpacing = 160;
+    int startX = SCREEN_WIDTH / 2 - bottomSpacing * 2;
+    
+    // Panel background
+    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 200);
+    SDL_Rect bottomPanel = {startX - 10, bottomY - 5, bottomSpacing * 4 + 20, bottomButtonHeight + 10};
+    SDL_RenderFillRect(renderer, &bottomPanel);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(renderer, &bottomPanel);
+    
+    const char* actionLabels[] = {"SAVE", "LOAD", "TEST", "BACK"};
+    int actionColors[][3] = {{0, 120, 180}, {180, 120, 0}, {0, 180, 60}, {180, 60, 60}};
+    
+    for(int i = 0; i < 4; i++) {
+        SDL_Rect actionButton = {startX + i * bottomSpacing, bottomY, bottomButtonWidth, bottomButtonHeight};
+        SDL_SetRenderDrawColor(renderer, actionColors[i][0], actionColors[i][1], actionColors[i][2], 255);
+        SDL_RenderFillRect(renderer, &actionButton);
+        SDL_SetRenderDrawColor(renderer, 220, 220, 220, 255);
+        SDL_RenderDrawRect(renderer, &actionButton);
+        drawText(actionLabels[i], actionButton.x + 35, actionButton.y + 18, 255, 255, 255, 2);
+    }
+    
+    // ===== INFO DISPLAY =====
+    // Rotation indicator
+    char rotText[32];
+    snprintf(rotText, sizeof(rotText), "ROT: %.0f", cameraRotation);
+    drawText(rotText, 10, SCREEN_HEIGHT - 100, 255, 255, 100, 2);
+    
+    // Map size indicator
+    char sizeText[32];
+    snprintf(sizeText, sizeof(sizeText), "SIZE: %dx%d", editorMapWidth, editorMapHeight);
+    drawText(sizeText, 10, SCREEN_HEIGHT - 130, 200, 200, 200, 2);
+    
+    // Instructions
+    drawText("ARROWS: Rotate | CLICK: Place/Erase", SCREEN_WIDTH / 2 - 180, 50, 200, 200, 200, 1);
+}
+
 void render() {
     // Clear screen
     SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
@@ -3172,7 +5033,7 @@ void render() {
         applyLighting(skyRed, skyGreen, skyBlue, ceilingLight);
         
         for(int x = 0; x < SCREEN_WIDTH; x++) {
-            SDL_SetRenderDrawColor(renderer, skyRed, skyGreen, skyBlue, 255);
+                SDL_SetRenderDrawColor(renderer, skyRed, skyGreen, skyBlue, 255);
             SDL_RenderDrawPoint(renderer, x, y);
         }
     }
@@ -3394,18 +5255,36 @@ void render() {
         if(side == 0) laserDist = (mapX - posX + (1 - stepX) / 2) / laserDirX;
         else laserDist = (mapY - posY + (1 - stepY) / 2) / laserDirY;
         
-        // Dibujar rayo láser rojo en el centro de la pantalla
+        // Dibujar rayo láser rojo desde el arma hasta el centro (vertical)
+        int centerX = SCREEN_WIDTH / 2;
         int centerY = SCREEN_HEIGHT / 2;
-        SDL_SetRenderDrawColor(renderer, 255, 0, 0, 200);
+        int weaponY = SCREEN_HEIGHT - 100; // Posición del arma (abajo)
         
-        // Línea gruesa para el láser
-        for(int i = -2; i <= 2; i++) {
-            SDL_RenderDrawLine(renderer, SCREEN_WIDTH/2 - 100, centerY + i, SCREEN_WIDTH/2 + 100, centerY + i);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        
+        // Resplandor exterior rojo grande
+        for(int i = -12; i <= 12; i++) {
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 30);
+            SDL_RenderDrawLine(renderer, centerX + i, weaponY, centerX + i, centerY);
         }
         
-        // Núcleo brillante
-        SDL_SetRenderDrawColor(renderer, 255, 150, 150, 255);
-        SDL_RenderDrawLine(renderer, SCREEN_WIDTH/2 - 100, centerY, SCREEN_WIDTH/2 + 100, centerY);
+        // Resplandor medio rojo
+        for(int i = -6; i <= 6; i++) {
+            SDL_SetRenderDrawColor(renderer, 255, 50, 50, 100);
+            SDL_RenderDrawLine(renderer, centerX + i, weaponY, centerX + i, centerY);
+        }
+        
+        // Núcleo láser rojo intenso
+        for(int i = -3; i <= 3; i++) {
+            SDL_SetRenderDrawColor(renderer, 255, 100, 100, 200);
+            SDL_RenderDrawLine(renderer, centerX + i, weaponY, centerX + i, centerY);
+        }
+        
+        // Centro del láser (blanco-rojo brillante)
+        SDL_SetRenderDrawColor(renderer, 255, 200, 200, 255);
+        SDL_RenderDrawLine(renderer, centerX, weaponY, centerX, centerY);
+        
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
         
         // Dañar enemigos en el láser
         for(auto& enemy : enemies) {
@@ -3450,13 +5329,22 @@ void render() {
                 if(screenX >= 0 && screenX < SCREEN_WIDTH && transformY < zBuffer[screenX]) {
                     // Alpha decrece con la edad de la estela
                     int alpha = (i * 255) / bullet.trail.size(); // Más vieja = más transparente
-                    int trailSize = std::max(1, int(15 / transformY));
+                    int trailSize = bullet.isBazooka ? std::max(2, int(35 / transformY)) : std::max(1, int(20 / transformY));
                     
-                    // Estela amarilla tenue
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 0, alpha);
-                    SDL_Rect trailRect = {screenX - trailSize/2, screenY - trailSize/2, trailSize, trailSize};
-                    SDL_RenderFillRect(renderer, &trailRect);
+                    
+                    if(bullet.isBazooka) {
+                        // Estela violeta para bazooka
+                        SDL_SetRenderDrawColor(renderer, 180, 80, 230, alpha);
+                        SDL_Rect trailRect = {screenX - trailSize/2, screenY - trailSize/2, trailSize, trailSize};
+                        SDL_RenderFillRect(renderer, &trailRect);
+                    } else {
+                        // Estela azul brillante para balas normales
+                        SDL_SetRenderDrawColor(renderer, 100, 150, 255, alpha);
+                        SDL_Rect trailRect = {screenX - trailSize/2, screenY - trailSize/2, trailSize, trailSize};
+                        SDL_RenderFillRect(renderer, &trailRect);
+                    }
+                    
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
                 }
             }
@@ -3476,28 +5364,80 @@ void render() {
             
             // Z-buffer check: solo dibujar si la bala está delante de las paredes
             if(screenX >= 0 && screenX < SCREEN_WIDTH && transformY < zBuffer[screenX]) {
-                // Bala MÁS PEQUEÑA
-                int bulletSize = std::max(2, int(40 / transformY));
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
                 
-                // Dibujar bala brillante (amarilla)
-                SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
-                SDL_Rect bulletRect = {screenX - bulletSize/2, screenY - bulletSize/2, bulletSize, bulletSize};
-                SDL_RenderFillRect(renderer, &bulletRect);
-                
-                // Borde blanco brillante (solo si es grande)
-                if(bulletSize > 3) {
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                    SDL_RenderDrawRect(renderer, &bulletRect);
+                if(bullet.isBazooka) {
+                    // === BALA DE BAZOOKA VIOLETA - MÁS GRANDE ===
+                    int bulletSize = std::max(6, int(80 / transformY)); // Más grande que normal
+                    
+                    // Resplandor exterior violeta gigante
+                    int glowSize = bulletSize + 15;
+                    SDL_SetRenderDrawColor(renderer, 150, 0, 200, 80);
+                    SDL_Rect outerGlow = {screenX - glowSize/2, screenY - glowSize/2, glowSize, glowSize};
+                    SDL_RenderFillRect(renderer, &outerGlow);
+                    
+                    // Resplandor medio violeta
+                    int midGlow = bulletSize + 8;
+                    SDL_SetRenderDrawColor(renderer, 180, 50, 230, 150);
+                    SDL_Rect midGlowRect = {screenX - midGlow/2, screenY - midGlow/2, midGlow, midGlow};
+                    SDL_RenderFillRect(renderer, &midGlowRect);
+                    
+                    // Núcleo violeta brillante
+                    SDL_SetRenderDrawColor(renderer, 200, 100, 255, 255);
+                    SDL_Rect bulletRect = {screenX - bulletSize/2, screenY - bulletSize/2, bulletSize, bulletSize};
+                    SDL_RenderFillRect(renderer, &bulletRect);
+                    
+                    // Centro blanco-violeta (core)
+                    int coreSize = std::max(3, bulletSize / 2);
+                    SDL_SetRenderDrawColor(renderer, 230, 180, 255, 255);
+                    SDL_Rect coreRect = {screenX - coreSize/2, screenY - coreSize/2, coreSize, coreSize};
+                    SDL_RenderFillRect(renderer, &coreRect);
+                    
+                    // Anillo exterior para efecto de cohete
+                    SDL_SetRenderDrawColor(renderer, 255, 150, 255, 200);
+                    for(int i = 0; i < 4; i++) {
+                        SDL_Rect ring = {screenX - bulletSize/2 + i, screenY - bulletSize/2 + i, 
+                                        bulletSize - i*2, bulletSize - i*2};
+                        SDL_RenderDrawRect(renderer, &ring);
+                    }
+                } else {
+                    // === BALA NORMAL AZUL ===
+                    int bulletSize = std::max(3, int(50 / transformY));
+                    
+                    // Resplandor exterior azul grande
+                    int glowSize = bulletSize + 8;
+                    SDL_SetRenderDrawColor(renderer, 50, 100, 255, 100);
+                    SDL_Rect outerGlow = {screenX - glowSize/2, screenY - glowSize/2, glowSize, glowSize};
+                    SDL_RenderFillRect(renderer, &outerGlow);
+                    
+                    // Resplandor medio azul
+                    int midGlow = bulletSize + 4;
+                    SDL_SetRenderDrawColor(renderer, 100, 150, 255, 180);
+                    SDL_Rect midGlowRect = {screenX - midGlow/2, screenY - midGlow/2, midGlow, midGlow};
+                    SDL_RenderFillRect(renderer, &midGlowRect);
+                    
+                    // Núcleo azul brillante
+                    SDL_SetRenderDrawColor(renderer, 150, 200, 255, 255);
+                    SDL_Rect bulletRect = {screenX - bulletSize/2, screenY - bulletSize/2, bulletSize, bulletSize};
+                    SDL_RenderFillRect(renderer, &bulletRect);
+                    
+                    // Centro blanco-azul (core)
+                    int coreSize = std::max(2, bulletSize / 2);
+                    SDL_SetRenderDrawColor(renderer, 200, 230, 255, 255);
+                    SDL_Rect coreRect = {screenX - coreSize/2, screenY - coreSize/2, coreSize, coreSize};
+                    SDL_RenderFillRect(renderer, &coreRect);
                 }
+                
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
             }
         }
     }
     
-    // Draw laser beams con estela lenta y roja
+    // Draw laser beams con estela MEJORADA - animación giratoria y efectos geniales
     for(const auto& beam : laserBeams) {
         if(!beam.active) continue;
         
-        // Dibujar estela del láser (MUY lenta y duradera)
+        // Dibujar estela del láser con efectos mejorados
         for(size_t i = 0; i < beam.trail.size(); i++) {
             double trailX = beam.trail[i].first;
             double trailY = beam.trail[i].second;
@@ -3514,24 +5454,147 @@ void render() {
                 int screenY = SCREEN_HEIGHT / 2;
                 
                 if(screenX >= 0 && screenX < SCREEN_WIDTH && transformY < zBuffer[screenX]) {
-                    // Alpha decrece más lento
-                    int alpha = 100 + ((i * 155) / std::max((size_t)1, beam.trail.size()));
-                    int beamSize = std::max(2, int(60 / transformY));
+                    // Alpha decrece más lento para estela duradera
+                    float ageRatio = (float)i / std::max((size_t)1, beam.trail.size());
+                    int alpha = 80 + (int)(ageRatio * 175); // 80 a 255
+                    int beamSize = std::max(3, int(70 / transformY));
                     
-                    // Estela roja del láser
+                    // Efecto de rotación espiral basado en edad y tiempo
+                    float spiralRotation = beam.rotation + (ageRatio * 360.0f * 2); // 2 vueltas completas
+                    
+                    // Calcular offset de la espiral (órbita alrededor del centro)
+                    float spiralRadius = beamSize * 0.3f * (1.0f - ageRatio); // Radio decrece
+                    int offsetX = (int)(cos(spiralRotation * M_PI / 180.0f) * spiralRadius);
+                    int offsetY = (int)(sin(spiralRotation * M_PI / 180.0f) * spiralRadius);
+                    
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                    SDL_SetRenderDrawColor(renderer, 255, 50, 50, alpha);
-                    SDL_Rect beamRect = {screenX - beamSize/2, screenY - beamSize/2, beamSize, beamSize};
-                    SDL_RenderFillRect(renderer, &beamRect);
                     
-                    // Brillo central
-                    if(i > beam.trail.size() * 0.7) {
-                        SDL_SetRenderDrawColor(renderer, 255, 150, 150, alpha);
-                        SDL_Rect glowRect = {screenX - beamSize/4, screenY - beamSize/4, beamSize/2, beamSize/2};
-                        SDL_RenderFillRect(renderer, &glowRect);
+                    // Capa 1: Resplandor exterior rojo oscuro (más grande)
+                    int outerSize = beamSize + 6;
+                    SDL_SetRenderDrawColor(renderer, 180, 20, 20, alpha / 3);
+                    SDL_Rect outerGlow = {screenX + offsetX - outerSize/2, screenY + offsetY - outerSize/2, 
+                                          outerSize, outerSize};
+                    SDL_RenderFillRect(renderer, &outerGlow);
+                    
+                    // Capa 2: Resplandor medio rojo brillante
+                    int midSize = beamSize + 3;
+                    SDL_SetRenderDrawColor(renderer, 255, 50, 50, alpha / 2);
+                    SDL_Rect midGlow = {screenX + offsetX - midSize/2, screenY + offsetY - midSize/2, 
+                                        midSize, midSize};
+                    SDL_RenderFillRect(renderer, &midGlow);
+                    
+                    // Capa 3: Núcleo central rojo intenso
+                    SDL_SetRenderDrawColor(renderer, 255, 80, 80, alpha);
+                    SDL_Rect beamCore = {screenX + offsetX - beamSize/2, screenY + offsetY - beamSize/2, 
+                                         beamSize, beamSize};
+                    SDL_RenderFillRect(renderer, &beamCore);
+                    
+                    // Capa 4: Brillo central blanco-rosa (solo en la parte más nueva)
+                    if(ageRatio > 0.6) {
+                        int coreSize = std::max(2, beamSize / 2);
+                        int coreAlpha = (int)(alpha * (ageRatio - 0.6f) / 0.4f); // Fade in
+                        SDL_SetRenderDrawColor(renderer, 255, 200, 200, coreAlpha);
+                        SDL_Rect hotCore = {screenX + offsetX - coreSize/2, screenY + offsetY - coreSize/2, 
+                                           coreSize, coreSize};
+                        SDL_RenderFillRect(renderer, &hotCore);
                     }
+                    
+                    // Partículas extras alrededor (efecto de energía)
+                    if(i % 3 == 0 && ageRatio > 0.5) {
+                        for(int p = 0; p < 4; p++) {
+                            float particleAngle = spiralRotation + (p * 90.0f);
+                            float particleRadius = beamSize * 0.8f;
+                            int particleX = (int)(cos(particleAngle * M_PI / 180.0f) * particleRadius);
+                            int particleY = (int)(sin(particleAngle * M_PI / 180.0f) * particleRadius);
+                            
+                            int particleSize = std::max(1, beamSize / 4);
+                            int particleAlpha = alpha / 2;
+                            SDL_SetRenderDrawColor(renderer, 255, 100, 100, particleAlpha);
+                            SDL_Rect particle = {screenX + offsetX + particleX - particleSize/2, 
+                                                screenY + offsetY + particleY - particleSize/2, 
+                                                particleSize, particleSize};
+                            SDL_RenderFillRect(renderer, &particle);
+                        }
+                    }
+                    
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
                 }
+            }
+        }
+    }
+    
+    // Draw explosions (explosiones animadas)
+    for(const auto& explosion : explosions) {
+        if(!explosion.active) continue;
+        
+        double relX = explosion.x - posX;
+        double relY = explosion.y - posY;
+        
+        double invDet = 1.0 / (planeX * dirY - dirX * planeY);
+        double transformX = invDet * (dirY * relX - dirX * relY);
+        double transformY = invDet * (-planeY * relX + planeX * relY);
+        
+        if(transformY > 0.1) {
+            int screenX = int((SCREEN_WIDTH / 2) * (1 + transformX / transformY));
+            int screenY = SCREEN_HEIGHT / 2;
+            
+            if(screenX >= 0 && screenX < SCREEN_WIDTH && transformY < zBuffer[screenX]) {
+                // Tamaño de explosión crece y luego decrece
+                float progress = (float)explosion.frame / 30.0f;
+                float sizeFactor = progress < 0.3f ? (progress / 0.3f) : (1.0f - (progress - 0.3f) / 0.7f);
+                int explosionSize = std::max(10, int(sizeFactor * 150 / transformY));
+                
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                
+                // Capas de explosión (naranja y amarillo)
+                // Capa externa (roja oscura)
+                int outerSize = explosionSize;
+                int outerAlpha = (int)(180 * sizeFactor);
+                SDL_SetRenderDrawColor(renderer, 255, 50, 0, outerAlpha);
+                SDL_Rect outerExplosion = {screenX - outerSize/2, screenY - outerSize/2, outerSize, outerSize};
+                SDL_RenderFillRect(renderer, &outerExplosion);
+                
+                // Capa media (naranja brillante)
+                int midSize = explosionSize * 0.7f;
+                int midAlpha = (int)(220 * sizeFactor);
+                SDL_SetRenderDrawColor(renderer, 255, 150, 0, midAlpha);
+                SDL_Rect midExplosion = {screenX - midSize/2, screenY - midSize/2, midSize, midSize};
+                SDL_RenderFillRect(renderer, &midExplosion);
+                
+                // Capa interna (amarillo brillante)
+                int innerSize = explosionSize * 0.4f;
+                int innerAlpha = (int)(255 * sizeFactor);
+                SDL_SetRenderDrawColor(renderer, 255, 255, 100, innerAlpha);
+                SDL_Rect innerExplosion = {screenX - innerSize/2, screenY - innerSize/2, innerSize, innerSize};
+                SDL_RenderFillRect(renderer, &innerExplosion);
+                
+                // Centro blanco brillante
+                int coreSize = explosionSize * 0.2f;
+                if(coreSize > 2) {
+                    int coreAlpha = (int)(255 * (1.0f - progress) * sizeFactor);
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, coreAlpha);
+                    SDL_Rect coreExplosion = {screenX - coreSize/2, screenY - coreSize/2, coreSize, coreSize};
+                    SDL_RenderFillRect(renderer, &coreExplosion);
+                }
+                
+                // Partículas de humo (4 direcciones)
+                if(progress > 0.2f) {
+                    for(int p = 0; p < 4; p++) {
+                        float angle = p * 90.0f * M_PI / 180.0f;
+                        float particleDist = explosionSize * 0.8f * (progress - 0.2f) / 0.8f;
+                        int particleX = screenX + (int)(cos(angle) * particleDist);
+                        int particleY = screenY + (int)(sin(angle) * particleDist);
+                        int particleSize = std::max(3, explosionSize / 8);
+                        int particleAlpha = (int)(150 * (1.0f - progress));
+                        
+                        SDL_SetRenderDrawColor(renderer, 100, 100, 100, particleAlpha);
+                        SDL_Rect particle = {particleX - particleSize/2, particleY - particleSize/2, 
+                                            particleSize, particleSize};
+                        SDL_RenderFillRect(renderer, &particle);
+                    }
+                }
+                
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
             }
         }
     }
@@ -3806,8 +5869,8 @@ void mainLoop() {
         case STATE_PLAYING:
             if(!isReplaying) {
                 // Normal gameplay mode
-                handleInput();
-                updateEnemies(deltaTime);
+    handleInput();
+    updateEnemies(deltaTime);
                 
                 // Record frame automatically
                 if(isRecording && !gameOver && !gameWon) {
@@ -3818,7 +5881,7 @@ void mainLoop() {
                 handleReplayInput();
                 updateReplay();
             }
-            render();
+    render();
             break;
             
         case STATE_REPLAY_VIEWER:
@@ -3826,6 +5889,14 @@ void mainLoop() {
             handleReplayInput();
             updateReplay();
             render();
+            break;
+            
+        case STATE_MAP_EDITOR:
+            // Map editor mode
+            handleMapEditorInput();
+            renderIsometricMap();
+            drawMapEditorUI();
+            SDL_RenderPresent(renderer);
             break;
     }
 }
