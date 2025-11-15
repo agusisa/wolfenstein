@@ -1,0 +1,364 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║        WOLFENSTEIN 3D - NUEVAS FEATURES 3D - ¡COMPILACIÓN EXITOSA!          ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+✅ TODAS LAS NUEVAS FEATURES IMPLEMENTADAS Y COMPILADAS EXITOSAMENTE
+
+═══════════════════════════════════════════════════════════════════════════════
+🎯 RESUMEN DE NUEVAS FEATURES
+═══════════════════════════════════════════════════════════════════════════════
+
+1. ✅ ENEMIGOS 3D CON SOMBRAS
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   
+   ¡LOS ENEMIGOS YA NO SON PLANOS!
+   
+   🎨 EFECTO 3D CON SOMBRAS:
+   • Cálculo de shadeFactor basado en posición
+   • Partes centrales más brillantes
+   • Partes laterales más oscuras
+   • Sensación de volumen y profundidad
+   
+   👤 SOLDADOS (Estilo 3D detallado):
+   • Piernas (gris oscuro)
+   • Torso (uniforme gris con sombras)
+   • Brazos visibles a los lados
+   • Cabeza (color piel realista)
+   • Casco verde oscuro
+   • Banda roja nazi en el pecho
+   • ¡Parecen figuras 3D reales!
+   
+   🐕 PERROS (Diseño único):
+   • Más bajos que los soldados (60% altura)
+   • Cuerpo marrón robusto
+   • Cabeza prominente adelante
+   • Patas animadas
+   • OJOS ROJOS brillantes (¡agresivos!)
+   • Postura de ataque
+   
+   RESULTADO: ¡Enemigos con volumen y profundidad! 🎨
+
+2. ✅ PERROS ATACANTES
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   
+   🐕💨 PERROS GUARDIANES NAZIS:
+   
+   CARACTERÍSTICAS:
+   • ¡CORREN AL DOBLE DE VELOCIDAD! (0.6 vs 0.3)
+   • Actualización cada 0.2s (vs 0.5s soldados)
+   • Rango de detección: 25 unidades
+   • Atacan de cerca (< 1.0 unidad)
+   • Daño por ataque: 8 HP
+   • ¡TE PERSIGUEN IMPLACABLEMENTE!
+   
+   ESTRATEGIA IA:
+   • Corren directo hacia el jugador
+   • No disparan, solo atacan cuerpo a cuerpo
+   • Más agresivos y peligrosos de cerca
+   • Perfectos para emboscadas
+   
+   DISTRIBUCIÓN:
+   • 7 Soldados + 7 Perros = 14 enemigos
+   • Alternados por el mapa
+   • ¡Variedad de amenazas!
+
+3. ✅ SOLDADOS DISPARAN BALAS
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   
+   🔫 SISTEMA DE DISPARO ENEMIGO:
+   
+   MECÁNICA:
+   • Soldados mantienen distancia (3-15 unidades)
+   • Disparan cada 2-3 segundos (cooldown variable)
+   • Solo disparan si estás en rango
+   • Retroceden si te acercas demasiado
+   • ¡BALAS FÍSICAS que viajan por el espacio!
+   
+   IA TÁCTICA:
+   • Acercarse si dist > 3.0
+   • Retroceder si dist < 2.0
+   • Disparar si 2.0 < dist < 15.0
+   • Movimiento más lento que perros (0.25)
+   
+   DAÑO:
+   • Bala enemiga: 15 HP
+   • ¡Peligroso a distancia!
+
+4. ✅ BALAS ENEMIGAS VISIBLES
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   
+   🔴 ¡VES LAS BALAS VINIENDO HACIA TI!
+   
+   APARIENCIA:
+   • COLOR: Rojo brillante (255, 0, 0)
+   • BORDE: Naranja brillante (255, 150, 0)
+   • ESTELA: Aura roja detrás
+   • TAMAÑO: Más grandes que balas jugador
+   • ¡MUY VISIBLE Y AMENAZANTE!
+   
+   FÍSICA:
+   • Velocidad: 0.3 (más lento que jugador)
+   • Lifetime: 120 frames (2 segundos)
+   • Colisión con paredes
+   • Colisión con jugador (radio 0.5)
+   • Z-buffer: No se ven detrás de paredes
+   
+   EFECTO VISUAL:
+   • Núcleo rojo sólido
+   • Borde naranja brillante
+   • Estela roja expandida
+   • ¡Perfectamente visible mientras vuela!
+   
+   RESULTADO: ¡Puedes esquivar las balas! 🎯
+
+5. ✅ TEXTURA DE CIELO EN EL TECHO
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   
+   ☁️ CIELO PROCEDURAL REALISTA:
+   
+   GRADIENTE:
+   • Arriba: Azul claro (235, 206, 135)
+   • Abajo: Azul más oscuro
+   • Transición suave
+   • Sensación de atmósfera
+   
+   NUBES:
+   • Patrón procedural matemático
+   • Blancas (255, 255, 255)
+   • Distribuidas naturalmente
+   • En el tercio superior del cielo
+   
+   ALGORITMO:
+   • cloudPattern = ((x / 40 + y / 30) % 5) + ((x / 20) % 3)
+   • if cloudPattern > 5 → Nube
+   • else → Cielo azul
+   
+   RESULTADO: ¡Techo realista como cielo abierto! ☀️
+
+═══════════════════════════════════════════════════════════════════════════════
+⚔️ COMPARACIÓN: ANTES vs AHORA
+═══════════════════════════════════════════════════════════════════════════════
+
+ENEMIGOS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ ANTES: Sprites planos 2D
+✅ AHORA: Enemigos 3D con sombras y volumen
+
+❌ ANTES: Solo un tipo de enemigo
+✅ AHORA: Soldados Y perros (diferentes IA)
+
+❌ ANTES: Solo atacan de cerca
+✅ AHORA: Soldados disparan a distancia, perros corren
+
+❌ ANTES: Movimiento uniforme
+✅ AHORA: Perros rápidos, soldados tácticos
+
+BALAS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ ANTES: Solo jugador dispara
+✅ AHORA: Enemigos también disparan
+
+❌ ANTES: No ves balas enemigas
+✅ AHORA: Balas rojas visibles volando hacia ti
+
+❌ ANTES: Daño instantáneo
+✅ AHORA: Puedes esquivar las balas
+
+AMBIENTE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ ANTES: Techo gris plano
+✅ AHORA: Cielo azul con nubes
+
+❌ ANTES: Ambiente cerrado
+✅ AHORA: Sensación de aire libre
+
+═══════════════════════════════════════════════════════════════════════════════
+📊 DETALLES TÉCNICOS
+═══════════════════════════════════════════════════════════════════════════════
+
+NUEVAS ESTRUCTURAS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+enum EnemyType { SOLDIER = 0, DOG = 1 };
+
+struct Enemy {
+    double x, y;
+    int health;
+    bool alive;
+    double moveTimer;
+    int animFrame;
+    EnemyType type;           // ⬅️ NUEVO!
+    double shootTimer;        // ⬅️ NUEVO!
+    double shootCooldown;     // ⬅️ NUEVO!
+};
+
+struct Bullet {
+    double x, y;
+    double dirX, dirY;
+    int lifetime;
+    bool active;
+    bool isEnemy;             // ⬅️ NUEVO!
+};
+
+std::vector<Bullet> enemyBullets;  // ⬅️ NUEVO!
+
+ALGORITMO DE SOMBRAS 3D:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+int relativeX = stripe - drawStartX;
+int spriteCenter = spriteWidth / 2;
+int distFromCenter = abs(relativeX - spriteCenter);
+float shadeFactor = 1.0 - (distFromCenter / (float)spriteCenter) * 0.3;
+
+// Aplicar shadeFactor a cada color:
+color * shadeFactor
+
+RESULTADO: Centro brillante, bordes oscuros → Efecto 3D
+
+IA DE SOLDADOS (con disparo):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+enemy.shootTimer += deltaTime;
+
+if(enemy.shootTimer > enemy.shootCooldown && dist < 15 && dist > 2.0) {
+    // Crear bala enemiga
+    Bullet enemyBullet;
+    enemyBullet.x = enemy.x;
+    enemyBullet.y = enemy.y;
+    enemyBullet.dirX = dx / dist;  // Hacia jugador
+    enemyBullet.dirY = dy / dist;
+    enemyBullet.lifetime = 120;
+    enemyBullet.active = true;
+    enemyBullet.isEnemy = true;
+    enemyBullets.push_back(enemyBullet);
+}
+
+IA DE PERROS (corredores):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if(enemy.type == DOG) {
+    if(enemy.moveTimer > 0.2) {  // ¡Rápido!
+        double speed = 0.6;      // ¡Doble velocidad!
+        // Correr directo hacia el jugador
+    }
+}
+
+TEXTURA DE CIELO:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+for(int y = 0; y < SCREEN_HEIGHT / 2; y++) {
+    int skyBlue = 135 + (y * 30) / (SCREEN_HEIGHT / 2);
+    int skyGreen = 206 - (y * 50) / (SCREEN_HEIGHT / 2);
+    int skyRed = 235 - (y * 100) / (SCREEN_HEIGHT / 2);
+    
+    for(int x = 0; x < SCREEN_WIDTH; x++) {
+        int cloudPattern = ((x / 40 + y / 30) % 5) + ((x / 20) % 3);
+        if(cloudPattern > 5 && y < SCREEN_HEIGHT / 3) {
+            // Nube
+        } else {
+            // Cielo
+        }
+    }
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+📊 ESTADÍSTICAS
+═══════════════════════════════════════════════════════════════════════════════
+
+Tamaño compilado:  1.0 MB (WebAssembly)
+Líneas agregadas:  ~150 líneas de código nuevo
+Funciones nuevas:  Sistema completo de disparo enemigo
+
+Enemigos totales:  15 (7 soldados + 7 perros + 1 soldado)
+Tipos de IA:       2 tipos diferentes
+Tipos de ataque:   3 (cuerpo a cuerpo, balas, perros)
+
+Tipos de balas:    2 (jugador: amarillas, enemigos: rojas)
+Velocidad balas:   Jugador: 0.5, Enemigos: 0.3
+
+Techo:             Cielo procedural con nubes
+Efecto 3D:         shadeFactor basado en posición
+
+═══════════════════════════════════════════════════════════════════════════════
+🎮 ESTRATEGIA DE JUEGO
+═══════════════════════════════════════════════════════════════════════════════
+
+CONTRA SOLDADOS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Mantén distancia (evita 3-15 unidades)
+• Usa cobertura (paredes)
+• Esquiva las balas rojas
+• Dispara entre sus ataques
+• ¡Láser es perfecto contra ellos!
+
+CONTRA PERROS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• ¡DISPARA RÁPIDO!
+• No dejes que se acerquen
+• Escopeta es devastadora
+• Usa puertas para embotellarlos
+• ¡Son RÁPIDOS, mantén la calma!
+
+COMBINACIÓN MORTAL:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Perros te persiguen
+• Soldados te disparan desde lejos
+• ¡Usa las paredes como cobertura!
+• Prioriza los perros primero
+• Luego elimina soldados con cuidado
+
+═══════════════════════════════════════════════════════════════════════════════
+🎨 IMPACTO VISUAL
+═══════════════════════════════════════════════════════════════════════════════
+
+ENEMIGOS 3D:
+  👤 Soldados con profundidad y sombras
+  🐕 Perros con ojos rojos brillantes
+  🎨 Efecto volumétrico realista
+
+BALAS ENEMIGAS:
+  🔴 Rojas brillantes volando hacia ti
+  💥 Estela roja intimidante
+  ⚠️ ¡Fáciles de ver y esquivar!
+
+CIELO:
+  ☁️ Nubes blancas realistas
+  🌤️ Gradiente azul natural
+  🏞️ Sensación de exterior
+
+═══════════════════════════════════════════════════════════════════════════════
+✨ RESUMEN
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ Enemigos 3D con sombras y volumen
+✅ Perros rápidos que te persiguen
+✅ Soldados que disparan balas
+✅ Balas enemigas visibles (rojas)
+✅ Textura de cielo con nubes
+
+RESULTADO: ¡Juego MUCHO más dinámico, desafiante e inmersivo! 🎮
+
+═══════════════════════════════════════════════════════════════════════════════
+🚀 CÓMO JUGAR
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Abre: http://localhost:8000/wolf3d.html
+
+2. Observa las mejoras:
+   • Mira hacia arriba → ¡Cielo con nubes!
+   • Enemigos → ¡Efecto 3D con sombras!
+   • Perros marrones → ¡Te corren!
+   • Soldados → ¡Te disparan balas rojas!
+
+3. ¡Sobrevive al caos!
+
+═══════════════════════════════════════════════════════════════════════════════
+
+¡DISFRUTA DEL JUEGO MEJORADO! 🎮🚀
+
+Compilado con ❤️ usando C++11, SDL2, Emscripten y WebAssembly
+
+═══════════════════════════════════════════════════════════════════════════════
+

@@ -1,0 +1,149 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  WOLFENSTEIN 3D - WEBASSEMBLY - MEGA ENHANCED EDITION!          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+🎮 NUEVAS CARACTERÍSTICAS AGREGADAS:
+
+1. SISTEMA DE ARMAS (4 ARMAS TOTALES):
+   ═══════════════════════════════════════════════════════════════
+   
+   [1] PISTOLA 
+       • Daño: 50 HP
+       • Munición: 1 bala por disparo
+       • Disparo único, precisión alta
+   
+   [2] AMETRALLADORA 
+       • Daño: 50 HP
+       • Munición: 1 bala por disparo
+       • Disparo automático, cadencia rápida
+       • Mantén presionado el botón para disparar ráfagas
+   
+   [3] LASER 
+       • Daño: 1 HP continuo
+       • Munición: 1 cada 5 frames
+       • Rayo láser rojo continuo que atraviesa el mapa
+       • Perfecto para eliminar múltiples enemigos alineados
+   
+   [4] ESCOPETA ⭐ NUEVO! ⭐
+       • Daño: 50 HP por perdigón x7 perdigones
+       • Munición: 5 balas por disparo
+       • Dispara 7 perdigones en patrón de dispersión
+       • Devastador a corta distancia
+       • Ideal para grupos de enemigos
+
+2. MAPA EXPANDIDO:
+   ═══════════════════════════════════════════════════════════════
+   • Tamaño anterior: 24x24
+   • Tamaño NUEVO: 40x40 (casi 3x más grande!)
+   • Más habitaciones, más pasillos, más lugares para explorar
+   • Diseño con múltiples zonas de combate
+
+3. SISTEMA DE ITEMS EN EL SUELO:
+   ═══════════════════════════════════════════════════════════════
+   
+   [💛] MUNICIÓN (Cajas amarillas)
+       • +30 balas
+       • Distribuidas por todo el mapa
+       
+   [❤️] PAQUETES DE SALUD (Cajas rojas con cruz blanca)
+       • +25 HP (máximo 100)
+       • Esenciales para sobrevivir
+       
+   • Los items se recogen automáticamente al acercarte (0.8 unidades)
+   • Total de 10 items distribuidos estratégicamente
+
+4. MÁS ENEMIGOS:
+   ═══════════════════════════════════════════════════════════════
+   • Enemigos anteriores: 6
+   • Enemigos NUEVOS: 15 (2.5x más!)
+   • Distribuidos por todo el mapa expandido
+   • Mayor desafío y duración del juego
+
+5. OPTIMIZACIONES DE RENDIMIENTO:
+   ═══════════════════════════════════════════════════════════════
+   • Raycasting optimizado con SDL_RenderDrawLine
+   • Texturas simplificadas pero con estilo vintage
+   • Balas más pequeñas (reducidas 60%)
+   • Sin lag al acercarse a las paredes
+   • Rendimiento fluido incluso en mapa 40x40
+
+6. CONTROLES MEJORADOS:
+   ═══════════════════════════════════════════════════════════════
+   
+   Movimiento:
+   • W/↑ - Avanzar
+   • S/↓ - Retroceder  
+   • A/← - Girar izquierda
+   • D/→ - Girar derecha
+   • Left Shift - Sprint (correr)
+   
+   Combate:
+   • SPACE / Click Izquierdo - Disparar
+   • 1 - Seleccionar Pistola
+   • 2 - Seleccionar Ametralladora
+   • 3 - Seleccionar Laser
+   • 4 - Seleccionar Escopeta ⭐ NUEVO!
+   
+   • Disparo automático: Mantén presionado para:
+     - Ametralladora (ráfaga continua)
+     - Laser (rayo continuo)
+     - Escopeta (múltiples disparos de perdigones)
+
+7. MECÁNICAS DE JUEGO:
+   ═══════════════════════════════════════════════════════════════
+   • Sistema de física para balas que viajan por el espacio
+   • Trayectoria visible de proyectiles
+   • Escopeta con dispersión realista de perdigones
+   • Sistema de recogida de items automático
+   • IA mejorada de enemigos para mapa más grande
+   • Sistema de sonido procedural (disparo, muerte, impacto)
+
+╔══════════════════════════════════════════════════════════════════╗
+║  ESTADÍSTICAS DEL JUEGO                                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+Tamaño del mapa:    40x40 tiles
+Enemigos totales:   15
+Items de munición:  5
+Items de salud:     5
+Armas disponibles:  4
+Munición inicial:   500 balas
+
+Tamaño compilado:   997 KB (WebAssembly)
+
+╔══════════════════════════════════════════════════════════════════╗
+║  CÓMO JUGAR                                                      ║
+╚══════════════════════════════════════════════════════════════════╝
+
+1. Abre el archivo: wolf3d.html en tu navegador
+2. Usa los números 1-4 para cambiar de arma
+3. Explora el mapa gigante de 40x40
+4. Recoge munición y salud (cajas amarillas y rojas)
+5. Elimina a los 15 enemigos
+6. ¡Usa la escopeta para destruir grupos de enemigos!
+
+╔══════════════════════════════════════════════════════════════════╗
+║  ESTRATEGIAS Y TIPS                                              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+• La ESCOPETA es devastadora a corta distancia
+• El LASER es perfecto para pasillos largos
+• La AMETRALLADORA para situaciones de emergencia
+• La PISTOLA para conservar munición
+• ¡Recoge items antes de que los enemigos te acorralen!
+• Usa las esquinas para tácticas de emboscada
+• El mapa grande permite estrategias de flanqueo
+
+╔══════════════════════════════════════════════════════════════════╗
+║  RENDIMIENTO                                                     ║
+╚══════════════════════════════════════════════════════════════════╝
+
+✓ Raycasting súper optimizado
+✓ Sin lag cerca de paredes
+✓ Texturas vintage de alto rendimiento
+✓ Balas pequeñas y eficientes
+✓ Sistema de items ligero
+✓ Corre fluido en navegadores modernos
+
+¡DISFRUTA DEL JUEGO! 🎮
+

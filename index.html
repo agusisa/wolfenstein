@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wolfenstein 3D - WebAssembly (¡Con Armas y Enemigos!)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            text-align: center;
+            max-width: 900px;
+            padding: 20px;
+        }
+        
+        h1 {
+            font-size: 3em;
+            margin: 0;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.5);
+            color: #ff4444;
+            letter-spacing: 2px;
+        }
+        
+        .subtitle {
+            font-size: 1.2em;
+            margin: 10px 0 30px 0;
+            color: #ffaa00;
+            font-weight: bold;
+        }
+        
+        .game-container {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            margin: 20px 0;
+        }
+        
+        canvas {
+            border: 3px solid #444;
+            border-radius: 5px;
+            background: #000;
+            display: block;
+            margin: 0 auto;
+            cursor: crosshair;
+        }
+        
+        .controls {
+            background: rgba(0,0,0,0.4);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        
+        .controls h2 {
+            margin-top: 0;
+            color: #ff4444;
+        }
+        
+        .control-item {
+            margin: 10px 0;
+            padding: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 5px;
+        }
+        
+        .key {
+            display: inline-block;
+            background: #444;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin: 0 5px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        
+        .info {
+            background: rgba(0,0,0,0.4);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .feature-box {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #ff4444;
+        }
+        
+        .feature-box h3 {
+            margin: 0 0 10px 0;
+            color: #ffaa00;
+            font-size: 1.1em;
+        }
+        
+        .footer {
+            margin-top: 30px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        
+        a {
+            color: #ff4444;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            text-decoration: underline;
+        }
+        
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .alert {
+            background: rgba(255,170,0,0.2);
+            border: 2px solid #ffaa00;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .alert h3 {
+            margin: 0 0 10px 0;
+            color: #ffaa00;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WOLFENSTEIN 3D</h1>
+        <div class="subtitle">🔫 ¡MEGA ENHANCED EDITION! 🔫</div>
+        
+        <div class="alert">
+            <h3>⚠️ ¡MEGA ACTUALIZACIÓN! 4 Armas + Mapa 40x40 + Items</h3>
+            <p>¡Ahora con ESCOPETA, mapa gigante, munición y vida en el suelo, y 15 enemigos!</p>
+        </div>
+        
+        <div class="game-container">
+            <div id="status">Cargando motor de juego...</div>
+            <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+        </div>
+        
+        <div class="controls">
+            <h2>🎮 Controles</h2>
+            <div class="control-item">
+                <span class="key">W</span> o <span class="key">↑</span> - Avanzar
+            </div>
+            <div class="control-item">
+                <span class="key">S</span> o <span class="key">↓</span> - Retroceder
+            </div>
+            <div class="control-item">
+                <span class="key">A</span> o <span class="key">←</span> - Girar a la izquierda
+            </div>
+            <div class="control-item">
+                <span class="key">D</span> o <span class="key">→</span> - Girar a la derecha
+            </div>
+            <div class="control-item" style="background: rgba(255,170,0,0.2);">
+                <strong>🔫 <span class="key">ESPACIO</span> o <span class="key">Click Izquierdo</span> - DISPARAR</strong>
+            </div>
+            <div class="control-item" style="background: rgba(255,0,0,0.2);">
+                <strong>⚔️ <span class="key">1</span> Pistola | <span class="key">2</span> Ametralladora | <span class="key">3</span> Laser | <span class="key">4</span> ESCOPETA</strong>
+            </div>
+            <div class="control-item">
+                <span class="key">Shift</span> - Correr (Sprint)
+            </div>
+        </div>
+        
+        <div class="features">
+            <div class="feature-box">
+                <h3>🔫 4 Armas Únicas</h3>
+                <p>Pistola, Ametralladora, Laser y ESCOPETA con perdigones. Cada una con mecánicas únicas.</p>
+            </div>
+            <div class="feature-box">
+                <h3>👹 15 Enemigos</h3>
+                <p>¡2.5x más enemigos! Guardias nazis con IA mejorada en mapa gigante.</p>
+            </div>
+            <div class="feature-box">
+                <h3>🗺️ Mapa 40x40</h3>
+                <p>Mapa expandido 3x más grande con múltiples habitaciones y zonas de combate.</p>
+            </div>
+            <div class="feature-box">
+                <h3>💊 Items en el Suelo</h3>
+                <p>Recoge munición (cajas amarillas) y paquetes de salud (cajas rojas) distribuidos por el mapa.</p>
+            </div>
+            <div class="feature-box">
+                <h3>🎯 Sistema de Combate</h3>
+                <p>Balas físicas que viajan por el espacio. Escopeta dispara 7 perdigones con dispersión.</p>
+            </div>
+            <div class="feature-box">
+                <h3>📊 HUD Completo</h3>
+                <p>Barra de salud, contador de munición, kills tracker, mira y selector de armas.</p>
+            </div>
+        </div>
+        
+        <div class="info">
+            <h2>ℹ️ Características del Juego</h2>
+            <p><strong>🎮 Gameplay:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li><strong>Tamaño del mapa:</strong> 40x40 tiles (¡3x más grande!)</li>
+                <li><strong>Enemigos:</strong> 15 guardias nazis patrullando</li>
+                <li><strong>Items:</strong> 10 items (5 munición + 5 salud)</li>
+                <li><strong>Salud inicial:</strong> 100 HP</li>
+                <li><strong>Munición inicial:</strong> 500 balas</li>
+                <li><strong>Armas:</strong> Pistola, Ametralladora, Laser, ESCOPETA</li>
+                <li><strong>Daño Pistola/MG:</strong> 50 HP (2 disparos)</li>
+                <li><strong>Daño Escopeta:</strong> 7 perdigones x 50 HP (¡devastadora!)</li>
+                <li><strong>Daño Laser:</strong> 1 HP continuo</li>
+                <li><strong>Sprint:</strong> Velocidad aumentada con Shift</li>
+            </ul>
+            
+            <p><strong>🔧 Características Técnicas:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>Motor de raycasting súper optimizado</li>
+                <li>Sprites 3D para enemigos e items</li>
+                <li>Sistema de física para balas</li>
+                <li>IA mejorada para mapa grande</li>
+                <li>Sistema de items con pickup automático</li>
+                <li>Renderizado a 60 FPS sin lag</li>
+                <li>Compilado a WebAssembly (997 KB)</li>
+            </ul>
+        </div>
+        
+        <div class="info">
+            <h2>🎯 Estrategia de Juego</h2>
+            <p><strong>Armas:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li><strong>Pistola (1):</strong> Precisión, bajo consumo de munición</li>
+                <li><strong>Ametralladora (2):</strong> Ráfagas rápidas, ideal para múltiples enemigos</li>
+                <li><strong>Laser (3):</strong> Rayo continuo, perfecto para pasillos largos</li>
+                <li><strong>Escopeta (4):</strong> 7 perdigones, devastadora a corta distancia</li>
+            </ul>
+            <p><strong>Tips:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>Recoge cajas amarillas (munición) y rojas (salud)</li>
+                <li>La escopeta es perfecta para grupos de enemigos</li>
+                <li>Usa el mapa grande para flanquear enemigos</li>
+                <li>Conserva munición cambiando entre armas</li>
+            </ul>
+        </div>
+        
+        <div class="footer">
+            <p>Código fuente original: <a href="https://github.com/id-Software/wolf3d" target="_blank">github.com/id-Software/wolf3d</a></p>
+            <p>Wolfenstein 3D © id Software | Motor de raycasting por John Carmack</p>
+            <p>Port a WebAssembly con sistema de combate completo</p>
+        </div>
+    </div>
+    
+    <script type='text/javascript'>
+        var statusElement = document.getElementById('status');
+        var canvasElement = document.getElementById('canvas');
+        
+        var Module = {
+            preRun: [],
+            postRun: [],
+            print: (function() {
+                return function(text) {
+                    text = Array.prototype.slice.call(arguments).join(' ');
+                    console.log(text);
+                };
+            })(),
+            printErr: function(text) {
+                text = Array.prototype.slice.call(arguments).join(' ');
+                console.error(text);
+            },
+            canvas: canvasElement,
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+                if (text === Module.setStatus.last.text) return;
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+                if (m && now - Module.setStatus.last.time < 30) return;
+                Module.setStatus.last.time = now;
+                Module.setStatus.last.text = text;
+                if (m) {
+                    text = m[1];
+                }
+                statusElement.innerHTML = text;
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparando... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : '¡Listo! Haz click en el canvas y comienza a cazar nazis! 🔫');
+            }
+        };
+        Module.setStatus('Descargando...');
+        window.onerror = function(event) {
+            Module.setStatus('Error: Ver consola JavaScript');
+            statusElement.style.color = '#ff4444';
+        };
+    </script>
+    <script async type="text/javascript" src="wolf3d.js"></script>
+</body>
+</html>
