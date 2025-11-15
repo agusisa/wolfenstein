@@ -143,8 +143,9 @@ struct Item {
     double x, y;
     ItemType type;
     bool active;
+    int lightIndex; // Index of the light source for this item
     
-    Item(double px, double py, ItemType t) : x(px), y(py), type(t), active(true) {}
+    Item(double px, double py, ItemType t) : x(px), y(py), type(t), active(true), lightIndex(-1) {}
 };
 
 std::vector<Item> items;
@@ -270,6 +271,33 @@ bool running = true;
 
 // Z-buffer for depth testing (para que enemigos y balas no se vean detrás de paredes)
 double zBuffer[SCREEN_WIDTH];
+
+// ============================================================================
+// DYNAMIC LIGHTING SYSTEM
+// ============================================================================
+
+struct LightSource {
+    double x, y;           // Position in map
+    float radius;          // Light range
+    int r, g, b;           // Light color
+    float intensity;       // 0.0 to 1.0
+    bool active;
+};
+
+struct SectorLight {
+    int minX, minY, maxX, maxY;  // Sector bounds
+    float brightness;             // 0.0 (dark) to 1.0 (bright)
+};
+
+// Global lighting variables
+std::vector<LightSource> lightSources;
+std::vector<SectorLight> sectors;
+float ambientLight = 0.15f;        // Base darkness (15% illumination)
+bool flashlightEnabled = false;
+float flashlightRadius = 8.0f;
+float flashlightIntensity = 1.0f;
+float globalLightMultiplier = 1.0f; // Slider control for all lights (0.0 to 2.0)
+bool sliderDragging = false;       // Track if user is dragging the light slider
 
 // Sound system
 Mix_Chunk* shootSound = nullptr;
@@ -998,6 +1026,134 @@ void initItems() {
     items.push_back(Item(22, 32, ITEM_HEALTH));
 }
 
+// ============================================================================
+// LIGHTING SYSTEM FUNCTIONS
+// ============================================================================
+
+void initLighting() {
+    lightSources.clear();
+    sectors.clear();
+    
+    // Add torches in corners and hallways
+    lightSources.push_back({5.5, 5.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({15.5, 5.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({5.5, 15.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({15.5, 15.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({30.5, 10.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({20.5, 20.5, 5.0f, 255, 220, 150, 1.0f, true}); // Brighter center light
+    lightSources.push_back({10.5, 30.5, 4.0f, 255, 200, 100, 0.8f, true});
+    lightSources.push_back({30.5, 30.5, 4.0f, 255, 200, 100, 0.8f, true});
+    
+    // Add lights for items (health packs = red, ammo = yellow/orange)
+    for(auto& item : items) {
+        item.lightIndex = lightSources.size(); // Store the index of this item's light
+        
+        if(item.type == ITEM_HEALTH) {
+            // Red glow for health packs
+            lightSources.push_back({item.x + 0.5, item.y + 0.5, 3.0f, 255, 50, 50, 0.6f, true});
+        } else if(item.type == ITEM_AMMO) {
+            // Yellow/orange glow for ammo
+            lightSources.push_back({item.x + 0.5, item.y + 0.5, 3.0f, 255, 200, 50, 0.6f, true});
+        }
+    }
+    
+    // Central room bright, corridors darker
+    sectors.push_back({18, 18, 23, 23, 0.4f});    // Central room
+    sectors.push_back({0, 0, 10, MAP_HEIGHT, 0.1f});  // Left corridor
+    sectors.push_back({30, 0, MAP_WIDTH, MAP_HEIGHT, 0.1f}); // Right corridor
+    
+    printf("Lighting system initialized: %d light sources (%d items with lights), %d sectors\n", 
+           (int)lightSources.size(), (int)items.size(), (int)sectors.size());
+}
+
+float calculateLightingAt(double x, double y, double z = 0) {
+    float totalLight = ambientLight;
+    
+    // Sector-based lighting
+    for(const auto& sector : sectors) {
+        if(x >= sector.minX && x <= sector.maxX && 
+           y >= sector.minY && y <= sector.maxY) {
+            totalLight += sector.brightness;
+        }
+    }
+    
+    // Static light sources
+    for(const auto& light : lightSources) {
+        if(!light.active) continue;
+        
+        double dx = x - light.x;
+        double dy = y - light.y;
+        double dist = sqrt(dx*dx + dy*dy);
+        
+        if(dist < light.radius) {
+            float attenuation = 1.0f - (dist / light.radius);
+            attenuation = attenuation * attenuation; // Quadratic falloff
+            totalLight += light.intensity * attenuation;
+        }
+    }
+    
+    // Player flashlight
+    if(flashlightEnabled) {
+        double dx = x - posX;
+        double dy = y - posY;
+        double dist = sqrt(dx*dx + dy*dy);
+        
+        // Check if point is in front of player (cone check)
+        double dotProduct = (dx * dirX + dy * dirY) / (dist + 0.001);
+        if(dotProduct > 0.5 && dist < flashlightRadius) {
+            float attenuation = 1.0f - (dist / flashlightRadius);
+            float coneEffect = (dotProduct - 0.5f) * 2.0f; // 0.0 to 1.0
+            totalLight += flashlightIntensity * attenuation * coneEffect;
+        }
+    }
+    
+    // Apply global light multiplier (from UI slider)
+    totalLight *= globalLightMultiplier;
+    
+    // Clamp to [0, 1]
+    if(totalLight > 1.0f) totalLight = 1.0f;
+    return totalLight;
+}
+
+bool isInShadow(double pointX, double pointY, const LightSource& light) {
+    double dx = pointX - light.x;
+    double dy = pointY - light.y;
+    double dist = sqrt(dx*dx + dy*dy);
+    
+    // Check for blocking entities
+    for(const auto& enemy : enemies) {
+        if(!enemy.alive) continue;
+        
+        // Simple circle-based shadow check
+        double edx = enemy.x - light.x;
+        double edy = enemy.y - light.y;
+        double enemyDist = sqrt(edx*edx + edy*edy);
+        
+        // If enemy is between light and point
+        if(enemyDist < dist) {
+            double px = enemy.x - pointX;
+            double py = enemy.y - pointY;
+            double pointToEnemyDist = sqrt(px*px + py*py);
+            
+            // Check if point is in shadow cone
+            if(pointToEnemyDist < 0.5) { // Enemy radius
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+void applyLighting(int& r, int& g, int& b, float lightLevel) {
+    r = int(r * lightLevel);
+    g = int(g * lightLevel);
+    b = int(b * lightLevel);
+    if(r > 255) r = 255;
+    if(g > 255) g = 255;
+    if(b > 255) b = 255;
+}
+
 void drawWeapon() {
     // Draw weapon at bottom center of screen
     int weaponWidth = 120;
@@ -1358,6 +1514,55 @@ void drawHUD() {
     // Weapon indicator
     const char* weaponNames[] = {"PISTOL", "M-GUN", "LASER", "SHOTGUN"};
     // Dibujar nombre del arma actual en la esquina
+    
+    // Flashlight indicator
+    if(flashlightEnabled) {
+        drawText("LIGHT", 10, 50, 255, 255, 100);
+    }
+    
+    // GLOBAL LIGHT INTENSITY SLIDER (arriba centro)
+    int sliderX = SCREEN_WIDTH / 2 - 100;
+    int sliderY = 10;
+    int sliderWidth = 200;
+    int sliderHeight = 20;
+    
+    // Label
+    drawText("LIGHT", sliderX - 60, sliderY + 5, 255, 200, 100);
+    
+    // Slider background (dark)
+    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 200);
+    SDL_Rect sliderBg = {sliderX, sliderY, sliderWidth, sliderHeight};
+    SDL_RenderFillRect(renderer, &sliderBg);
+    
+    // Slider border
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &sliderBg);
+    
+    // Slider fill (indicates current level, 0.0-2.0 range mapped to slider width)
+    float fillPercent = globalLightMultiplier / 2.0f; // 0.0 to 1.0
+    int fillWidth = int(fillPercent * sliderWidth);
+    
+    // Color gradient: red (low) -> yellow (mid) -> white (high)
+    int r, g, b;
+    if(globalLightMultiplier < 1.0f) {
+        // Red to Yellow (0.0 to 1.0)
+        r = 255;
+        g = int(globalLightMultiplier * 255);
+        b = 0;
+    } else {
+        // Yellow to White (1.0 to 2.0)
+        r = 255;
+        g = 255;
+        b = int((globalLightMultiplier - 1.0f) * 255);
+    }
+    
+    SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+    SDL_Rect sliderFill = {sliderX, sliderY, fillWidth, sliderHeight};
+    SDL_RenderFillRect(renderer, &sliderFill);
+    
+    // Percentage indicator (0-200%)
+    int percentage = int(globalLightMultiplier * 100);
+    drawNumber(percentage, sliderX + sliderWidth + 10, sliderY + 5, 255, 255, 255);
     
     // Crosshair
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -1736,9 +1941,12 @@ void drawEnemies() {
         // Aplicar efecto de caída al morir
         int fallOffsetPixels = int(enemy.fallOffset * SCREEN_HEIGHT * 0.5);
         
-        int drawStartY = -spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels;
+        // Aplicar efecto de salto (igual que las paredes y el piso)
+        int jumpOffset = int(verticalPosition * SCREEN_HEIGHT * 0.02);
+        
+        int drawStartY = -spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels + jumpOffset;
         if(drawStartY < 0) drawStartY = 0;
-        int drawEndY = spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels;
+        int drawEndY = spriteHeight / 2 + SCREEN_HEIGHT / 2 + fallOffsetPixels + jumpOffset;
         if(drawEndY >= SCREEN_HEIGHT) drawEndY = SCREEN_HEIGHT - 1;
         
         // Enemigos más delgados (30% del tamaño original)
@@ -1755,6 +1963,26 @@ void drawEnemies() {
                 int color = 255 - int(transformY * 10);
                 if(color < 50) color = 50;
                 
+                // Calculate lighting at enemy position
+                float enemyLight = calculateLightingAt(enemy.x, enemy.y);
+                
+                // Check shadows from light sources
+                for(const auto& light : lightSources) {
+                    if(light.active && isInShadow(enemy.x, enemy.y, light)) {
+                        enemyLight *= 0.3f; // Heavy shadow
+                        break;
+                    }
+                }
+                
+                // Apply distance fog
+                float fogFactor = 1.0f - (transformY / 20.0f);
+                if(fogFactor < 0.0f) fogFactor = 0.0f;
+                enemyLight *= fogFactor;
+                
+                // Apply lighting to base color
+                int litColor = int(color * enemyLight);
+                if(litColor < 0) litColor = 0;
+                
                 // Calcular posición relativa en el sprite (para efecto 3D)
                 int relativeX = stripe - drawStartX;
                 int spriteCenter = spriteWidth / 2;
@@ -1766,39 +1994,39 @@ void drawEnemies() {
                     
                     // Piernas
                     SDL_SetRenderDrawColor(renderer, 
-                        color/4 * shadeFactor, color/4 * shadeFactor, color/4 * shadeFactor, 255);
+                        litColor/4 * shadeFactor, litColor/4 * shadeFactor, litColor/4 * shadeFactor, 255);
                     SDL_Rect legs = {stripe, drawStartY + spriteHeight*2/3, 1, spriteHeight/3};
                     SDL_RenderFillRect(renderer, &legs);
                     
                     // Torso (uniforme gris)
                     SDL_SetRenderDrawColor(renderer, 
-                        color/3 * shadeFactor, color/3 * shadeFactor, color/3 * shadeFactor, 255);
+                        litColor/3 * shadeFactor, litColor/3 * shadeFactor, litColor/3 * shadeFactor, 255);
                     SDL_Rect torso = {stripe, drawStartY + spriteHeight/3, 1, spriteHeight/3};
                     SDL_RenderFillRect(renderer, &torso);
                     
                     // Brazos (más oscuros a los lados)
                     if(distFromCenter > spriteWidth * 0.3) {
                         SDL_SetRenderDrawColor(renderer, 
-                            color/4 * shadeFactor, color/4 * shadeFactor, color/4 * shadeFactor, 255);
+                            litColor/4 * shadeFactor, litColor/4 * shadeFactor, litColor/4 * shadeFactor, 255);
                         SDL_Rect arm = {stripe, drawStartY + spriteHeight/2, 1, spriteHeight/4};
                         SDL_RenderFillRect(renderer, &arm);
                     }
                     
                     // Cabeza (piel)
                     SDL_SetRenderDrawColor(renderer, 
-                        color * shadeFactor, color*0.8 * shadeFactor, color*0.6 * shadeFactor, 255);
+                        litColor * shadeFactor, litColor*0.8 * shadeFactor, litColor*0.6 * shadeFactor, 255);
                     SDL_Rect head = {stripe, drawStartY + spriteHeight/8, 1, spriteHeight/5};
                     SDL_RenderFillRect(renderer, &head);
                     
                     // Casco (verde oscuro)
                     SDL_SetRenderDrawColor(renderer, 
-                        30 * shadeFactor, 60 * shadeFactor, 30 * shadeFactor, 255);
+                        30 * shadeFactor * enemyLight, 60 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 255);
                     SDL_Rect helmet = {stripe, drawStartY, 1, spriteHeight/10};
                     SDL_RenderFillRect(renderer, &helmet);
                     
                     // Banda roja (Nazi)
                     if(distFromCenter < spriteWidth * 0.2) {
-                        SDL_SetRenderDrawColor(renderer, 180 * shadeFactor, 0, 0, 255);
+                        SDL_SetRenderDrawColor(renderer, 180 * shadeFactor * enemyLight, 0, 0, 255);
                         SDL_Rect band = {stripe, drawStartY + spriteHeight/2, 1, spriteHeight/12};
                         SDL_RenderFillRect(renderer, &band);
                     }
@@ -1811,7 +2039,7 @@ void drawEnemies() {
                     // Patas traseras
                     if(relativeX > spriteWidth * 0.6 || relativeX < spriteWidth * 0.4) {
                         SDL_SetRenderDrawColor(renderer, 
-                            50 * shadeFactor, 35 * shadeFactor, 15 * shadeFactor, 255);
+                            50 * shadeFactor * enemyLight, 35 * shadeFactor * enemyLight, 15 * shadeFactor * enemyLight, 255);
                         SDL_Rect leg = {stripe, int(dogStartY + dogHeight * 0.5), 1, int(dogHeight * 0.5)};
                         SDL_RenderFillRect(renderer, &leg);
                     }
@@ -1819,34 +2047,34 @@ void drawEnemies() {
                     // Cuerpo (pelaje marrón oscuro con gradiente)
                     int bodyColor = 90 + (relativeX % 5);
                     SDL_SetRenderDrawColor(renderer, 
-                        bodyColor * shadeFactor, (bodyColor * 0.6) * shadeFactor, 20 * shadeFactor, 255);
+                        bodyColor * shadeFactor * enemyLight, (bodyColor * 0.6) * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
                     SDL_Rect body = {stripe, int(dogStartY + dogHeight * 0.2), 1, int(dogHeight * 0.4)};
                     SDL_RenderFillRect(renderer, &body);
                     
                     // Pecho/vientre (más claro)
                     if(distFromCenter < spriteWidth * 0.25) {
                         SDL_SetRenderDrawColor(renderer, 
-                            120 * shadeFactor, 90 * shadeFactor, 50 * shadeFactor, 255);
+                            120 * shadeFactor * enemyLight, 90 * shadeFactor * enemyLight, 50 * shadeFactor * enemyLight, 255);
                         SDL_Rect chest = {stripe, int(dogStartY + dogHeight * 0.35), 1, int(dogHeight * 0.25)};
                         SDL_RenderFillRect(renderer, &chest);
                     }
                     
                     // Hombros/espalda (negro)
                     SDL_SetRenderDrawColor(renderer, 
-                        30 * shadeFactor, 25 * shadeFactor, 20 * shadeFactor, 255);
+                        30 * shadeFactor * enemyLight, 25 * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
                     SDL_Rect back = {stripe, int(dogStartY + dogHeight * 0.15), 1, int(dogHeight * 0.2)};
                     SDL_RenderFillRect(renderer, &back);
                     
                     // Cabeza (hocico prominente)
                     SDL_SetRenderDrawColor(renderer, 
-                        85 * shadeFactor, 60 * shadeFactor, 30 * shadeFactor, 255);
+                        85 * shadeFactor * enemyLight, 60 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 255);
                     SDL_Rect head = {stripe, int(dogStartY), 1, int(dogHeight * 0.35)};
                     SDL_RenderFillRect(renderer, &head);
                     
                     // Hocico (más oscuro, puntiagudo)
                     if(distFromCenter < spriteWidth * 0.2) {
                         SDL_SetRenderDrawColor(renderer, 
-                            40 * shadeFactor, 30 * shadeFactor, 20 * shadeFactor, 255);
+                            40 * shadeFactor * enemyLight, 30 * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
                         SDL_Rect snout = {stripe, int(dogStartY + dogHeight * 0.15), 1, int(dogHeight * 0.15)};
                         SDL_RenderFillRect(renderer, &snout);
                     }
@@ -1854,21 +2082,21 @@ void drawEnemies() {
                     // Orejas puntiagudas (hacia arriba)
                     if(distFromCenter < spriteWidth * 0.15 && relativeX % 7 < 3) {
                         SDL_SetRenderDrawColor(renderer, 
-                            60 * shadeFactor, 45 * shadeFactor, 25 * shadeFactor, 255);
+                            60 * shadeFactor * enemyLight, 45 * shadeFactor * enemyLight, 25 * shadeFactor * enemyLight, 255);
                         SDL_Rect ear = {stripe, int(dogStartY - dogHeight * 0.1), 1, int(dogHeight * 0.15)};
                         SDL_RenderFillRect(renderer, &ear);
                     }
                     
-                    // Ojos amarillos brillantes (lupinos)
+                    // Ojos amarillos brillantes (lupinos) - keep bright
                     if(distFromCenter < spriteWidth * 0.18 && relativeX % 5 < 2) {
-                        SDL_SetRenderDrawColor(renderer, 255, 200, 50, 255);
+                        SDL_SetRenderDrawColor(renderer, 255 * enemyLight, 200 * enemyLight, 50 * enemyLight, 255);
                         SDL_Rect eye = {stripe, int(dogStartY + dogHeight * 0.08), 1, 2};
                         SDL_RenderFillRect(renderer, &eye);
                     }
                     
-                    // Dientes visibles (agresivo)
+                    // Dientes visibles (agresivo) - keep bright
                     if(distFromCenter < spriteWidth * 0.12 && relativeX % 4 == 0) {
-                        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                        SDL_SetRenderDrawColor(renderer, 255 * enemyLight, 255 * enemyLight, 255 * enemyLight, 255);
                         SDL_Rect tooth = {stripe, int(dogStartY + dogHeight * 0.22), 1, 2};
                         SDL_RenderFillRect(renderer, &tooth);
                     }
@@ -1876,7 +2104,7 @@ void drawEnemies() {
                     // Patas delanteras
                     if(relativeX % 6 < 3) {
                         SDL_SetRenderDrawColor(renderer, 
-                            55 * shadeFactor, 40 * shadeFactor, 20 * shadeFactor, 255);
+                            55 * shadeFactor * enemyLight, 40 * shadeFactor * enemyLight, 20 * shadeFactor * enemyLight, 255);
                         SDL_Rect frontLeg = {stripe, int(dogStartY + dogHeight * 0.5), 1, int(dogHeight * 0.5)};
                         SDL_RenderFillRect(renderer, &frontLeg);
                     }
@@ -1884,7 +2112,7 @@ void drawEnemies() {
                     // Cola (detrás, levantada)
                     if(distFromCenter > spriteWidth * 0.3) {
                         SDL_SetRenderDrawColor(renderer, 
-                            70 * shadeFactor, 50 * shadeFactor, 25 * shadeFactor, 255);
+                            70 * shadeFactor * enemyLight, 50 * shadeFactor * enemyLight, 25 * shadeFactor * enemyLight, 255);
                         SDL_Rect tail = {stripe, int(dogStartY + dogHeight * 0.1), 1, int(dogHeight * 0.3)};
                         SDL_RenderFillRect(renderer, &tail);
                     }
@@ -1912,7 +2140,11 @@ void drawItems() {
         int spriteScreenX = int((SCREEN_WIDTH / 2) * (1 + transformX / transformY));
         
         int spriteSize = abs(int(SCREEN_HEIGHT / transformY * 0.4));
-        int drawStartY = -spriteSize / 2 + SCREEN_HEIGHT / 2 + 30; // On ground
+        
+        // Aplicar efecto de salto (igual que las paredes, piso y enemigos)
+        int jumpOffset = int(verticalPosition * SCREEN_HEIGHT * 0.02);
+        
+        int drawStartY = -spriteSize / 2 + SCREEN_HEIGHT / 2 + 30 + jumpOffset; // On ground
         int drawStartX = -spriteSize / 2 + spriteScreenX;
         
         if(drawStartX < 0 || drawStartX >= SCREEN_WIDTH) continue;
@@ -1921,23 +2153,39 @@ void drawItems() {
         // Z-buffer check: solo dibujar si está delante de paredes
         if(spriteScreenX >= 0 && spriteScreenX < SCREEN_WIDTH && transformY >= zBuffer[spriteScreenX]) continue;
         
+        // Calculate lighting at item position
+        float itemLight = calculateLightingAt(item.x, item.y);
+        
+        // Apply distance fog
+        float fogFactor = 1.0f - (transformY / 20.0f);
+        if(fogFactor < 0.0f) fogFactor = 0.0f;
+        itemLight *= fogFactor;
+        
         // Draw item sprite
         if(item.type == ITEM_AMMO) {
             // Yellow ammo box
-            SDL_SetRenderDrawColor(renderer, 200, 200, 0, 255);
+            int r = 200, g = 200, b = 0;
+            applyLighting(r, g, b, itemLight);
+            SDL_SetRenderDrawColor(renderer, r, g, b, 255);
             SDL_Rect itemRect = {drawStartX, drawStartY, spriteSize, spriteSize/2};
             SDL_RenderFillRect(renderer, &itemRect);
             
-            SDL_SetRenderDrawColor(renderer, 100, 100, 0, 255);
+            r = 100; g = 100; b = 0;
+            applyLighting(r, g, b, itemLight);
+            SDL_SetRenderDrawColor(renderer, r, g, b, 255);
             SDL_RenderDrawRect(renderer, &itemRect);
         } else {
             // Red health pack
-            SDL_SetRenderDrawColor(renderer, 200, 0, 0, 255);
+            int r = 200, g = 0, b = 0;
+            applyLighting(r, g, b, itemLight);
+            SDL_SetRenderDrawColor(renderer, r, g, b, 255);
             SDL_Rect itemRect = {drawStartX, drawStartY, spriteSize, spriteSize/2};
             SDL_RenderFillRect(renderer, &itemRect);
             
             // White cross
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            r = 255; g = 255; b = 255;
+            applyLighting(r, g, b, itemLight);
+            SDL_SetRenderDrawColor(renderer, r, g, b, 255);
             SDL_Rect cross1 = {drawStartX + spriteSize/2 - 2, drawStartY + 4, 4, spriteSize/2 - 8};
             SDL_Rect cross2 = {drawStartX + 4, drawStartY + spriteSize/4 - 2, spriteSize - 8, 4};
             SDL_RenderFillRect(renderer, &cross1);
@@ -1966,6 +2214,11 @@ void checkItemPickup() {
                 if(pickupHealthSound) Mix_PlayChannel(-1, pickupHealthSound, 0);
             }
             item.active = false;
+            
+            // Deactivate the item's light
+            if(item.lightIndex >= 0 && item.lightIndex < (int)lightSources.size()) {
+                lightSources[item.lightIndex].active = false;
+            }
         }
     }
 }
@@ -2084,6 +2337,11 @@ void handleInput() {
                 currentWeapon = SHOTGUN;
                 printf("Arma: Escopeta\n");
             }
+            // Toggle flashlight with F
+            else if(event.key.keysym.sym == SDLK_f) {
+                flashlightEnabled = !flashlightEnabled;
+                printf("Flashlight: %s\n", flashlightEnabled ? "ON" : "OFF");
+            }
             // REPLAY: Enter replay mode with 'U'
             else if(event.key.keysym.sym == SDLK_u) {
                 printf(">>> U key pressed! Recorded frames: %d\n", (int)recordedFrames.size());
@@ -2112,13 +2370,49 @@ void handleInput() {
         }
         if(event.type == SDL_MOUSEBUTTONDOWN) {
             if(event.button.button == SDL_BUTTON_LEFT) {
-                shoot();
+                int mouseX = event.button.x;
+                int mouseY = event.button.y;
+                
+                // Check if clicking on light slider
+                int sliderX = SCREEN_WIDTH / 2 - 100;
+                int sliderY = 10;
+                int sliderWidth = 200;
+                int sliderHeight = 20;
+                
+                if(mouseX >= sliderX && mouseX <= sliderX + sliderWidth &&
+                   mouseY >= sliderY && mouseY <= sliderY + sliderHeight) {
+                    // Clicked on slider - start dragging
+                    sliderDragging = true;
+                    
+                    // Update value immediately
+                    float normalizedX = (mouseX - sliderX) / (float)sliderWidth;
+                    globalLightMultiplier = normalizedX * 2.0f; // Map to 0.0-2.0 range
+                    if(globalLightMultiplier < 0.0f) globalLightMultiplier = 0.0f;
+                    if(globalLightMultiplier > 2.0f) globalLightMultiplier = 2.0f;
+                    
+                    printf("Light intensity: %.2f\n", globalLightMultiplier);
+                } else {
+                    // Not on slider - shoot
+                    shoot();
+                }
             }
         }
         if(event.type == SDL_MOUSEBUTTONUP) {
             if(event.button.button == SDL_BUTTON_LEFT) {
+                sliderDragging = false;
                 laserActive = false;
             }
+        }
+        if(event.type == SDL_MOUSEMOTION && sliderDragging) {
+            // Update slider while dragging
+            int mouseX = event.motion.x;
+            int sliderX = SCREEN_WIDTH / 2 - 100;
+            int sliderWidth = 200;
+            
+            float normalizedX = (mouseX - sliderX) / (float)sliderWidth;
+            globalLightMultiplier = normalizedX * 2.0f; // Map to 0.0-2.0 range
+            if(globalLightMultiplier < 0.0f) globalLightMultiplier = 0.0f;
+            if(globalLightMultiplier > 2.0f) globalLightMultiplier = 2.0f;
         }
     }
     
@@ -2866,31 +3160,67 @@ void render() {
     SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
     SDL_RenderClear(renderer);
     
-    // Draw ceiling con textura de cielo
+    // Draw ceiling with lighting (simplified - darker ambient)
     for(int y = 0; y < SCREEN_HEIGHT / 2; y++) {
-        // Gradiente de cielo (más claro arriba, más oscuro abajo)
+        // Keep sky gradient but apply darkness
         int skyBlue = 135 + (y * 30) / (SCREEN_HEIGHT / 2);
         int skyGreen = 206 - (y * 50) / (SCREEN_HEIGHT / 2);
         int skyRed = 235 - (y * 100) / (SCREEN_HEIGHT / 2);
         
+        // Apply ambient darkness to ceiling
+        float ceilingLight = ambientLight * 0.6f; // Ceiling darker
+        applyLighting(skyRed, skyGreen, skyBlue, ceilingLight);
+        
         for(int x = 0; x < SCREEN_WIDTH; x++) {
-            // Nubes procedurales (patrón simple)
-            int cloudPattern = ((x / 40 + y / 30) % 5) + ((x / 20) % 3);
-            if(cloudPattern > 5 && y < SCREEN_HEIGHT / 3) {
-                // Nubes blancas
-                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-            } else {
-                // Cielo azul
-                SDL_SetRenderDrawColor(renderer, skyRed, skyGreen, skyBlue, 255);
-            }
+            SDL_SetRenderDrawColor(renderer, skyRed, skyGreen, skyBlue, 255);
             SDL_RenderDrawPoint(renderer, x, y);
         }
     }
     
-    // Draw floor - Color sólido simple (sin textura que marea)
-    SDL_SetRenderDrawColor(renderer, 70, 60, 50, 255);
-    SDL_Rect floor = {0, SCREEN_HEIGHT / 2, SCREEN_WIDTH, SCREEN_HEIGHT / 2};
-    SDL_RenderFillRect(renderer, &floor);
+    // Draw floor with lighting
+    // Aplicar efecto de salto al piso
+    int jumpOffset = int(verticalPosition * SCREEN_HEIGHT * 0.02);
+    
+    for(int y = SCREEN_HEIGHT / 2; y < SCREEN_HEIGHT; y++) {
+        float rayDirX0 = dirX - planeX;
+        float rayDirY0 = dirY - planeY;
+        float rayDirX1 = dirX + planeX;
+        float rayDirY1 = dirY + planeY;
+        
+        int p = y - SCREEN_HEIGHT / 2;
+        float posZ = 0.5 * SCREEN_HEIGHT;
+        float rowDistance = posZ / p;
+        
+        float floorStepX = rowDistance * (rayDirX1 - rayDirX0) / SCREEN_WIDTH;
+        float floorStepY = rowDistance * (rayDirY1 - rayDirY0) / SCREEN_WIDTH;
+        
+        float floorX = posX + rowDistance * rayDirX0;
+        float floorY = posY + rowDistance * rayDirY0;
+        
+        // Aplicar offset de salto a la posición Y del piso
+        int floorScreenY = y + jumpOffset;
+        
+        // Solo dibujar si está dentro de los límites de la pantalla
+        if(floorScreenY >= SCREEN_HEIGHT / 2 && floorScreenY < SCREEN_HEIGHT) {
+            for(int x = 0; x < SCREEN_WIDTH; x++) {
+                float lightLevel = calculateLightingAt(floorX, floorY);
+                
+                // Distance fog
+                float fogFactor = 1.0f - (rowDistance / 20.0f);
+                if(fogFactor < 0.0f) fogFactor = 0.0f;
+                lightLevel *= fogFactor;
+                
+                int r = 70, g = 60, b = 50;
+                applyLighting(r, g, b, lightLevel);
+                
+                SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+                SDL_RenderDrawPoint(renderer, x, floorScreenY);
+                
+                floorX += floorStepX;
+                floorY += floorStepY;
+            }
+        }
+    }
     
     // Raycasting for walls with textures
     for(int x = 0; x < SCREEN_WIDTH; x++) {
@@ -2984,8 +3314,21 @@ void render() {
         else if(wallType == 3 && (texX == 0 || texX == 7)) r *= 0.6; // Metal
         else if(wallType == 4 && texX == 0) { r = 60; g = 60; b = 60; } // Mortero
         
+        // Calculate lighting at wall position
+        double wallWorldX = mapX + 0.5;
+        double wallWorldY = mapY + 0.5;
+        float lightLevel = calculateLightingAt(wallWorldX, wallWorldY);
+        
+        // Apply distance fog
+        float fogFactor = 1.0f - (perpWallDist / 20.0f); // Fog at 20 units
+        if(fogFactor < 0.0f) fogFactor = 0.0f;
+        lightLevel *= fogFactor;
+        
+        // Apply lighting to color
+        applyLighting(r, g, b, lightLevel);
+        
         // Darken for side
-        if(side == 1) { r *= 0.6; g *= 0.6; b *= 0.6; }
+        if(side == 1) { r *= 0.8; g *= 0.8; b *= 0.8; }
         
         // Dibujar línea completa en vez de píxel por píxel (MUY RÁPIDO)
         SDL_SetRenderDrawColor(renderer, r, g, b, 255);
@@ -3526,6 +3869,7 @@ int main(int argc, char* argv[]) {
     
     initEnemies();
     initItems();
+    initLighting();
     generateSounds();
     
     printf("===========================================\n");
