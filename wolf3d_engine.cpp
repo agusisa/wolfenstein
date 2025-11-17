@@ -311,12 +311,14 @@ enum EditorElement {
 int editorMapWidth = 24;
 int editorMapHeight = 24;
 int editorWorldMap[40][40];  // Maximum 40x40
+float editorZoom = 1.0f; // Zoom level (0.5 to 2.0)
 float cameraRotation = 45.0f; // 0, 90, 180, 270 degrees
 bool gridEnabled = true;
 EditorTool currentTool = TOOL_PAINT;
 EditorElement selectedElement = ELEM_WALL_1;
 double spawnX = 2.0;
 double spawnY = 2.0;
+double spawnDirection = 0.0; // Direction in degrees: 0=right, 90=down, 180=left, 270=up
 
 // Editor UI state
 int hoveredTileX = -1;
@@ -351,8 +353,8 @@ std::vector<LightSource> lightSources;
 std::vector<SectorLight> sectors;
 float ambientLight = 0.15f;        // Base darkness (15% illumination)
 bool flashlightEnabled = false;
-float flashlightRadius = 8.0f;
-float flashlightIntensity = 1.0f;
+float flashlightRadius = 15.0f;  // Mucho más alcance (antes 8.0)
+float flashlightIntensity = 1.2f; // Más brillante
 float globalLightMultiplier = 1.0f; // Slider control for all lights (0.0 to 2.0)
 bool sliderDragging = false;       // Track if user is dragging the light slider
 
@@ -1168,21 +1170,21 @@ float calculateLightingAt(double x, double y, double z = 0) {
         }
     }
     
-    // Player flashlight - projected forward from player
+    // Player flashlight - projected forward from player (original implementation)
     if(flashlightEnabled) {
-        // Project flashlight origin 1.5 units in front of player
-        double flashOriginX = posX + dirX * 1.5;
-        double flashOriginY = posY + dirY * 1.5;
+        // Project flashlight origin forward from player (closer to avoid wall clipping)
+        double flashOriginX = posX + dirX * 0.5;
+        double flashOriginY = posY + dirY * 0.5;
         
         double dx = x - flashOriginX;
         double dy = y - flashOriginY;
         double dist = sqrt(dx*dx + dy*dy);
         
-        // Check if point is in front of player (cone check with tighter angle)
+        // Check if point is in front of player (cone check)
         double dotProduct = (dx * dirX + dy * dirY) / (dist + 0.001);
         if(dotProduct > 0.7 && dist < flashlightRadius) {
             float attenuation = 1.0f - (dist / flashlightRadius);
-            float coneEffect = (dotProduct - 0.7f) * 3.33f; // 0.0 to 1.0 (adjusted for new threshold)
+            float coneEffect = (dotProduct - 0.7f) * 3.33f; // 0.0 to 1.0
             totalLight += flashlightIntensity * attenuation * coneEffect;
         }
     }
@@ -3123,20 +3125,48 @@ void handleMapEditorInput() {
                 if(mouseX >= leftPanelX && mouseX <= leftPanelX + buttonWidth &&
                    mouseY >= leftPanelY + i * 35 && mouseY <= leftPanelY + i * 35 + 30) {
                     // Change map size
-                    editorMapWidth = sizeValues[i];
-                    editorMapHeight = sizeValues[i];
+                    int newWidth = sizeValues[i];
+                    int newHeight = sizeValues[i];
                     
-                    // Clear map
+                    // Preserve walls within new bounds, clear walls outside
                     for(int y = 0; y < 40; y++) {
                         for(int x = 0; x < 40; x++) {
-                            editorWorldMap[x][y] = 0;
+                            if(x >= newWidth || y >= newHeight) {
+                                editorWorldMap[x][y] = 0;
+                            }
                         }
                     }
-                    editorLights.clear();
-                    editorEnemies.clear();
-                    editorItems.clear();
                     
-                    printf("Map resized to %dx%d\n", editorMapWidth, editorMapHeight);
+                    // Remove entities outside new bounds
+                    editorLights.erase(
+                        std::remove_if(editorLights.begin(), editorLights.end(),
+                            [newWidth, newHeight](const LightSource& l) {
+                                return l.x >= newWidth || l.y >= newHeight;
+                            }),
+                        editorLights.end()
+                    );
+                    
+                    editorEnemies.erase(
+                        std::remove_if(editorEnemies.begin(), editorEnemies.end(),
+                            [newWidth, newHeight](const Enemy& e) {
+                                return e.x >= newWidth || e.y >= newHeight;
+                            }),
+                        editorEnemies.end()
+                    );
+                    
+                    editorItems.erase(
+                        std::remove_if(editorItems.begin(), editorItems.end(),
+                            [newWidth, newHeight](const Item& i) {
+                                return i.x >= newWidth || i.y >= newHeight;
+                            }),
+                        editorItems.end()
+                    );
+                    
+                    // Update map size
+                    editorMapWidth = newWidth;
+                    editorMapHeight = newHeight;
+                    
+                    printf("Map resized to %dx%d (entities within bounds preserved)\n", editorMapWidth, editorMapHeight);
                     continue;
                 }
             }
@@ -3263,6 +3293,28 @@ void handleMapEditorInput() {
                 }
             }
             
+            // ZOOM BUTTONS
+            SDL_Rect zoomOutBtn = {10, SCREEN_HEIGHT - 70, 80, 25};
+            SDL_Rect zoomInBtn = {100, SCREEN_HEIGHT - 70, 80, 25};
+            
+            if(mouseX >= zoomOutBtn.x && mouseX <= zoomOutBtn.x + zoomOutBtn.w &&
+               mouseY >= zoomOutBtn.y && mouseY <= zoomOutBtn.y + zoomOutBtn.h) {
+                // Zoom Out
+                editorZoom -= 0.25f;
+                if(editorZoom < 0.5f) editorZoom = 0.5f;
+                printf("Zoom: %.2fx\n", editorZoom);
+                continue;
+            }
+            
+            if(mouseX >= zoomInBtn.x && mouseX <= zoomInBtn.x + zoomInBtn.w &&
+               mouseY >= zoomInBtn.y && mouseY <= zoomInBtn.y + zoomInBtn.h) {
+                // Zoom In
+                editorZoom += 0.25f;
+                if(editorZoom > 2.0f) editorZoom = 2.0f;
+                printf("Zoom: %.2fx\n", editorZoom);
+                continue;
+            }
+            
             // If no UI button was clicked, try to place/erase on map
             if(hoveredTileX >= 0 && hoveredTileY >= 0 && 
                hoveredTileX < editorMapWidth && hoveredTileY < editorMapHeight) {
@@ -3308,10 +3360,20 @@ void handleMapEditorInput() {
                                hoveredTileX, hoveredTileY);
                     }
                     else if(selectedElement == ELEM_SPAWN) {
-                        // Set spawn point
-                        spawnX = hoveredTileX + 0.5;
-                        spawnY = hoveredTileY + 0.5;
-                        printf("Spawn point set to (%.1f, %.1f)\n", spawnX, spawnY);
+                        // Check if clicking on existing spawn point to rotate it
+                        int sx = (int)spawnX;
+                        int sy = (int)spawnY;
+                        if(sx == hoveredTileX && sy == hoveredTileY) {
+                            // Rotate spawn direction: 0 -> 90 -> 180 -> 270 -> 0
+                            spawnDirection += 90.0;
+                            if(spawnDirection >= 360.0) spawnDirection = 0.0;
+                            printf("Spawn direction rotated to %.0f degrees\n", spawnDirection);
+                        } else {
+                            // Set spawn point at new location
+                            spawnX = hoveredTileX + 0.5;
+                            spawnY = hoveredTileY + 0.5;
+                            printf("Spawn point set to (%.1f, %.1f)\n", spawnX, spawnY);
+                        }
                     }
                 }
                 else {
@@ -3415,8 +3477,8 @@ void exportMapToJSON() {
     }
     json += "  ],\n";
     
-    // Spawn point
-    sprintf(buffer, "  \"spawn\": {\"x\": %.2f, \"y\": %.2f}\n", spawnX, spawnY);
+    // Spawn point with direction
+    sprintf(buffer, "  \"spawn\": {\"x\": %.2f, \"y\": %.2f, \"direction\": %.0f}\n", spawnX, spawnY, spawnDirection);
     json += buffer;
     
     json += "}\n";
@@ -3581,13 +3643,19 @@ void loadMapFromJSON(const char* jsonData) {
         }
     }
     
-    // Parse spawn
+    // Parse spawn with direction
     pos = json.find("\"spawn\":");
     if(pos != std::string::npos) {
-        float x, y;
-        if(sscanf(json.c_str() + pos + 8, "{\"x\": %f, \"y\": %f", &x, &y) == 2) {
+        float x, y, dir;
+        int parsed = sscanf(json.c_str() + pos + 8, "{\"x\": %f, \"y\": %f, \"direction\": %f", &x, &y, &dir);
+        if(parsed >= 2) {
             spawnX = x;
             spawnY = y;
+            if(parsed == 3) {
+                spawnDirection = dir;
+            } else {
+                spawnDirection = 0.0; // Default direction if not specified
+            }
         }
     }
     
@@ -3660,10 +3728,16 @@ void testMap() {
     kills = 0;
     gameOver = false;
     gameWon = false;
-    dirX = -1.0;
-    dirY = 0.0;
-    planeX = 0.0;
-    planeY = 0.66;
+    
+    // Set player direction based on spawnDirection
+    double rad = spawnDirection * M_PI / 180.0;
+    dirX = cos(rad);
+    dirY = sin(rad);
+    
+    // Calculate perpendicular plane for FOV (90 degrees rotated to the RIGHT)
+    // To rotate (dirX, dirY) 90° clockwise: (x, y) -> (y, -x)
+    planeX = dirY * 0.66;  // sin(rad) * 0.66
+    planeY = -dirX * 0.66; // -cos(rad) * 0.66
     
     // Reset replay state
     isReplaying = false;
@@ -4358,9 +4432,9 @@ void handleMainMenuInput() {
                 editorEnemies = enemies;
                 editorItems = items;
                 
-                // Set editor dimensions to current map size
-                editorMapWidth = 24;  // Default, can be changed in editor
-                editorMapHeight = 24;
+                // Set editor dimensions to full map size (40x40)
+                editorMapWidth = MAP_WIDTH;   // 40
+                editorMapHeight = MAP_HEIGHT; // 40
                 
                 // Switch to editor
                 currentGameState = STATE_MAP_EDITOR;
@@ -4691,9 +4765,10 @@ void renderIsometricMap() {
     SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
     SDL_RenderClear(renderer);
     
-    const int tileWidth = 32;
-    const int tileHeight = 16;
-    const int wallHeight = 24;
+    // Apply zoom to tile dimensions
+    const int tileWidth = (int)(32 * editorZoom);
+    const int tileHeight = (int)(16 * editorZoom);
+    const int wallHeight = (int)(24 * editorZoom);
     const int centerX = SCREEN_WIDTH / 2;
     const int centerY = SCREEN_HEIGHT / 2 - 100;
     
@@ -4774,20 +4849,7 @@ void renderIsometricMap() {
                 else if(wallType == 3) { r = 60; g = 100; b = 180; }  // Blue metal
                 else { r = 100; g = 140; b = 80; }                    // Green mortar
                 
-                // Top face (diamond)
-                SDL_Point topPoints[5] = {
-                    {isoX, isoY - wallHeight},
-                    {isoX + tileWidth/2, isoY + tileHeight/2 - wallHeight},
-                    {isoX, isoY + tileHeight - wallHeight},
-                    {isoX - tileWidth/2, isoY + tileHeight/2 - wallHeight},
-                    {isoX, isoY - wallHeight}
-                };
-                SDL_SetRenderDrawColor(renderer, r, g, b, 255);
-                for(int dy = 0; dy < tileHeight; dy++) {
-                    int width = (dy < tileHeight/2) ? dy * 2 : (tileHeight - dy) * 2;
-                    SDL_RenderDrawLine(renderer, isoX - width/2, isoY + dy - wallHeight, 
-                                     isoX + width/2, isoY + dy - wallHeight);
-                }
+                // Note: Top face (diamond) removed for cleaner editor view
                 
                 // Left face
                 SDL_SetRenderDrawColor(renderer, r * 0.7, g * 0.7, b * 0.7, 255);
@@ -4903,27 +4965,70 @@ void renderIsometricMap() {
         }
     }
     
-    // 7. Draw spawn point
+    // 7. Draw spawn point with directional arrow
     {
         int sx = (int)spawnX;
         int sy = (int)spawnY;
         if(sx >= 0 && sx < editorMapWidth && sy >= 0 && sy < editorMapHeight) {
             std::pair<int, int> iso = mapToIso(sx, sy);
             int isoX = iso.first;
-            int isoY = iso.second;
+            int isoY = iso.second - 15;
             
-            // Green circle
+            // Draw directional arrow (green)
             SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-            for(int r = 0; r < 10; r++) {
-                for(int a = 0; a < 360; a += 10) {
-                    int px = isoX + r * cos(a * 3.14159 / 180.0);
-                    int py = isoY + r * sin(a * 3.14159 / 180.0) - 15;
-                    SDL_RenderDrawPoint(renderer, px, py);
+            
+            // Calculate arrow direction based on spawnDirection
+            double rad = spawnDirection * M_PI / 180.0;
+            double arrowLength = 15;
+            
+            // Arrow shaft
+            int shaftEndX = isoX + (int)(cos(rad) * arrowLength);
+            int shaftEndY = isoY + (int)(sin(rad) * arrowLength);
+            
+            for(int t = 0; t < 3; t++) {
+                SDL_RenderDrawLine(renderer, isoX, isoY + t - 1, shaftEndX, shaftEndY + t - 1);
+            }
+            
+            // Arrow head (3 lines forming a triangle)
+            double headAngle1 = rad + 2.5;
+            double headAngle2 = rad - 2.5;
+            int headSize = 8;
+            
+            int head1X = shaftEndX - (int)(cos(headAngle1) * headSize);
+            int head1Y = shaftEndY - (int)(sin(headAngle1) * headSize);
+            int head2X = shaftEndX - (int)(cos(headAngle2) * headSize);
+            int head2Y = shaftEndY - (int)(sin(headAngle2) * headSize);
+            
+            SDL_RenderDrawLine(renderer, shaftEndX, shaftEndY, head1X, head1Y);
+            SDL_RenderDrawLine(renderer, shaftEndX, shaftEndY, head2X, head2Y);
+            SDL_RenderDrawLine(renderer, head1X, head1Y, head2X, head2Y);
+            
+            // Fill arrow head
+            for(int dy = -headSize; dy <= headSize; dy++) {
+                for(int dx = -headSize; dx <= headSize; dx++) {
+                    int px = shaftEndX + dx;
+                    int py = shaftEndY + dy;
+                    
+                    // Check if point is inside the triangle
+                    double d1 = (px - shaftEndX) * (head1Y - shaftEndY) - (py - shaftEndY) * (head1X - shaftEndX);
+                    double d2 = (px - head1X) * (head2Y - head1Y) - (py - head1Y) * (head2X - head1X);
+                    double d3 = (px - head2X) * (shaftEndY - head2Y) - (py - head2Y) * (shaftEndX - head2X);
+                    
+                    if((d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0)) {
+                        SDL_RenderDrawPoint(renderer, px, py);
+                    }
                 }
             }
             
-            // Draw "S"
-            drawText("S", isoX - 4, isoY - 20, 255, 255, 255, 1);
+            // Draw base circle
+            SDL_SetRenderDrawColor(renderer, 50, 200, 50, 255);
+            for(int r = 0; r < 6; r++) {
+                for(int a = 0; a < 360; a += 15) {
+                    int px = isoX + r * cos(a * M_PI / 180.0);
+                    int py = isoY + r * sin(a * M_PI / 180.0);
+                    SDL_RenderDrawPoint(renderer, px, py);
+                }
+            }
         }
     }
     
@@ -5157,6 +5262,29 @@ void drawMapEditorUI() {
     char rotText[32];
     snprintf(rotText, sizeof(rotText), "ROT: %.0f", cameraRotation);
     drawText(rotText, 10, SCREEN_HEIGHT - 100, 255, 255, 100, 2);
+    
+    // Zoom controls
+    SDL_Rect zoomOutBtn = {10, SCREEN_HEIGHT - 70, 80, 25};
+    SDL_Rect zoomInBtn = {100, SCREEN_HEIGHT - 70, 80, 25};
+    
+    // Zoom Out button
+    SDL_SetRenderDrawColor(renderer, 100, 100, 150, 255);
+    SDL_RenderFillRect(renderer, &zoomOutBtn);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &zoomOutBtn);
+    drawText("ZOOM -", zoomOutBtn.x + 8, zoomOutBtn.y + 8, 255, 255, 255, 2);
+    
+    // Zoom In button
+    SDL_SetRenderDrawColor(renderer, 100, 100, 150, 255);
+    SDL_RenderFillRect(renderer, &zoomInBtn);
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_RenderDrawRect(renderer, &zoomInBtn);
+    drawText("ZOOM +", zoomInBtn.x + 8, zoomInBtn.y + 8, 255, 255, 255, 2);
+    
+    // Zoom indicator
+    char zoomText[32];
+    snprintf(zoomText, sizeof(zoomText), "ZOOM: %.1fx", editorZoom);
+    drawText(zoomText, 10, SCREEN_HEIGHT - 40, 150, 200, 255, 2);
     
     // Map size indicator
     char sizeText[32];
